@@ -1,0 +1,10 @@
+﻿node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+*.zip
+openapi.tmp.json
+.agents/
+.DS_Store
