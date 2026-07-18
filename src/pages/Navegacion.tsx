@@ -7,14 +7,20 @@ import Card from '../components/ui/Card'
 import { api } from '../services/api'
 import { useDeliveryStore } from '../store/deliveryStore'
 import { useOrders } from '../hooks/useOrders'
+import { Order } from '../types'
+
+function matchesOrder(order?: Order | null, id?: string) {
+  return Boolean(order && id && (order.id === id || order.pedidoId === id))
+}
 
 export default function Navegacion() {
   const { id } = useParams()
   const nav = useNavigate()
   const { data: orders = [] } = useOrders()
-  const storeOrder = useDeliveryStore((state) => state.orders.find((order) => order.id === id))
+  const activeOrder = useDeliveryStore((state) => state.activeOrder)
+  const storeOrder = useDeliveryStore((state) => state.orders.find((order) => matchesOrder(order, id)))
   const updateOrderStatus = useDeliveryStore((state) => state.updateOrderStatus)
-  const order = storeOrder ?? orders.find((item) => item.id === id)
+  const order = storeOrder ?? orders.find((item) => matchesOrder(item, id)) ?? (matchesOrder(activeOrder, id) ? activeOrder : null)
 
   const encodedAddress = useMemo(() => encodeURIComponent(order?.address ?? ''), [order?.address])
 

@@ -3,7 +3,7 @@ import {
   ChevronLeft,
   Clock3,
   GripVertical,
-  Navigation,
+  MapPin,
   Play,
   RefreshCw,
   RotateCcw,
@@ -25,6 +25,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import Button from '../components/ui/Button'
 import Card from '../components/ui/Card'
+import { StatusBadge } from '../components/ui/Badge'
 import { useAvailableOrders, useOrders } from '../hooks/useOrders'
 import { cn, formatOrderNumber } from '../lib/utils'
 import { api } from '../services/api'
@@ -78,9 +79,25 @@ function routeOrders(orders: Order[]) {
     )
 }
 
+function prioritizeActiveDelivery(orders: Order[]) {
+  const active = orders.filter((order) => order.status === 'EN_RUTA')
+  if (!active.length) return orders
+
+  const activeIds = new Set(active.map((order) => order.id))
+  return [...active, ...orders.filter((order) => !activeIds.has(order.id))]
+}
+
 function mergeOrders(assignedOrders: Order[], availableOrders: Order[]) {
   const assignedIds = new Set(assignedOrders.map((order) => order.pedidoId ?? order.id))
   return [...assignedOrders, ...availableOrders.filter((order) => !assignedIds.has(order.pedidoId ?? order.id))]
+}
+
+function includeFallbackOrder(orders: Order[], order?: Order | null) {
+  if (!order || order.status === 'ENTREGADO') return orders
+
+  const key = order.pedidoId ?? order.id
+  const exists = orders.some((item) => item.id === order.id || (item.pedidoId ?? item.id) === key)
+  return exists ? orders : [order, ...orders]
 }
 
 function neighborhood(address: string, index: number) {
@@ -201,10 +218,11 @@ export default function RutaSugerida() {
     })
   )
   const setActiveOrder = useDeliveryStore((state) => state.setActiveOrder)
+  const activeOrder = useDeliveryStore((state) => state.activeOrder)
   const updateOrderStatus = useDeliveryStore((state) => state.updateOrderStatus)
   const orders = useMemo(
-    () => mergeOrders(assignedQuery.data ?? [], availableQuery.data ?? []),
-    [assignedQuery.data, availableQuery.data]
+    () => includeFallbackOrder(mergeOrders(assignedQuery.data ?? [], availableQuery.data ?? []), activeOrder),
+    [activeOrder, assignedQuery.data, availableQuery.data]
   )
   const isLoading = assignedQuery.isLoading || availableQuery.isLoading
   const isError = assignedQuery.isError || availableQuery.isError
@@ -220,7 +238,7 @@ export default function RutaSugerida() {
     })
     const addedOrders = suggestedList.filter((order) => !routeOrderIds.includes(order.id))
 
-    return [...ordered, ...addedOrders]
+    return prioritizeActiveDelivery([...ordered, ...addedOrders])
   }, [routeOrderIds, suggestedList])
   const filteredList = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
@@ -230,9 +248,8 @@ export default function RutaSugerida() {
       [order.number, order.pedidoId, order.id].some((value) => value?.toLowerCase().includes(term))
     )
   }, [list, searchTerm])
-  const firstAssignedOrder = list.find((order) => order.status !== 'SIN_ASIGNAR')
-  const visibleStops = barranquillaStops.slice(0, Math.min(filteredList.length, barranquillaStops.length))
-  const routePath = visibleStops.map((stop, index) => `${index === 0 ? 'M' : 'L'}${stop.x} ${stop.y}`).join(' ')
+  const currentDelivery = list.find((order) => order.status === 'EN_RUTA')
+  const firstAssignedOrder = currentDelivery ?? list.find((order) => order.status !== 'SIN_ASIGNAR')
   const hasCustomOrder =
     routeOrderIds.length > 0 && list.map((order) => order.id).join('|') !== suggestedList.map((order) => order.id).join('|')
 
@@ -295,7 +312,7 @@ export default function RutaSugerida() {
 
       updateOrderStatus(firstAssignedOrder.id, 'EN_RUTA')
       setActiveOrder(updatedOrder)
-      queryClient.setQueryData(['orders'], (current: Order[] | undefined) =>
+      queryClient.setQueryData(['orders', 'all'], (current: Order[] | undefined) =>
         (current ?? assignedQuery.data ?? []).map((order) =>
           order.id === firstAssignedOrder.id ? { ...order, status: 'EN_RUTA' as const } : order
         )
@@ -422,68 +439,35 @@ export default function RutaSugerida() {
             </Button>
           </div>
 
-          <div className="relative h-72 overflow-hidden delivery-map">
-            <div className="absolute inset-y-0 right-0 w-20 bg-emerald-100/60" />
-            <div className="absolute inset-0 bg-white/10" />
-            <span className="absolute left-7 top-7 text-[10px] font-black uppercase tracking-wide text-ink/35">Barranquilla</span>
-            <span className="absolute right-4 top-24 rotate-90 text-[9px] font-black uppercase tracking-wide text-emerald-700/45">
-              Rio Magdalena
-            </span>
-            <span className="absolute left-44 top-12 text-[10px] font-black uppercase tracking-wide text-ink/35">Riomar</span>
-            <span className="absolute left-36 top-24 text-[10px] font-black uppercase tracking-wide text-ink/35">Alto Prado</span>
-            <span className="absolute bottom-24 left-20 text-[10px] font-black uppercase tracking-wide text-ink/35">Centro</span>
-            <span className="absolute bottom-14 left-36 text-[10px] font-black uppercase tracking-wide text-ink/35">Soledad</span>
-
-            <svg className="absolute inset-0 h-full w-full" viewBox="0 0 360 288" aria-hidden="true">
-              {routePath ? (
-                <>
-                  <path
-                    d={routePath}
-                    fill="none"
-                    stroke="#e62673"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="5"
-                  />
-                  <path
-                    d={routePath}
-                    fill="none"
-                    stroke="#ffffff"
-                    strokeDasharray="2 12"
-                    strokeLinecap="round"
-                    strokeWidth="2"
-                  />
-                </>
-              ) : null}
-            </svg>
-
-            {visibleStops.map((stop, index) => (
-              <span
-                key={`${stop.label}-${index}`}
-                className="absolute grid h-7 w-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-primary text-xs font-black text-white shadow-md ring-4 ring-white/70"
-                style={{ left: `${(stop.x / 360) * 100}%`, top: `${(stop.y / 288) * 100}%` }}
-                title={stop.label}
-              >
-                {index + 1}
-              </span>
-            ))}
-
-            <div className="absolute bottom-4 right-4 overflow-hidden rounded-xl bg-white shadow-soft ring-1 ring-black/10">
-              <button type="button" className="grid h-9 w-9 place-items-center border-b border-black/10 text-lg font-black">
-                +
-              </button>
-              <button type="button" className="grid h-9 w-9 place-items-center text-lg font-black">
-                -
-              </button>
+          {currentDelivery ? (
+            <div className="border-t border-black/5 bg-primary/5 px-4 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-black uppercase text-primary">Entrega actual</p>
+                  <h3 className="mt-1 truncate text-base font-black text-ink">{currentDelivery.customer}</h3>
+                  <p className="mt-1 text-sm font-semibold leading-5 text-ink/80">{currentDelivery.address}</p>
+                </div>
+                <StatusBadge status={currentDelivery.status} className="shrink-0" />
+              </div>
+              <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 text-xs font-bold text-muted">
+                <span className="min-w-0 truncate">
+                  {formatOrderNumber(currentDelivery.number)}
+                  <span className="mx-1 text-black/20">/</span>
+                  {currentDelivery.zone || 'Sin zona'}
+                  <span className="mx-1 text-black/20">/</span>
+                  {currentDelivery.neighborhood || neighborhood(currentDelivery.address, 0)}
+                </span>
+                <span className="inline-flex items-center gap-1 text-ink">
+                  <Clock3 size={13} />
+                  {currentDelivery.time}
+                </span>
+              </div>
+              <div className="mt-3 inline-flex items-center gap-1 text-xs font-black text-primary">
+                <MapPin size={13} />
+                Pedido que se esta entregando ahora
+              </div>
             </div>
-            <button
-              type="button"
-              className="absolute bottom-4 right-16 grid h-9 w-9 place-items-center rounded-xl bg-white text-ink shadow-soft ring-1 ring-black/10"
-              aria-label="Centrar ruta"
-            >
-              <Navigation size={17} />
-            </button>
-          </div>
+          ) : null}
 
           <div className="divide-y divide-black/10">
             {list.length ? (
@@ -528,7 +512,7 @@ export default function RutaSugerida() {
               disabled={!firstAssignedOrder || isStarting}
             >
               <Play size={18} fill="currentColor" />
-              {isStarting ? 'Iniciando ruta...' : 'Iniciar ruta'}
+              {isStarting ? 'Iniciando ruta...' : currentDelivery ? 'Continuar entrega' : 'Iniciar ruta'}
             </Button>
           </div>
         </section>

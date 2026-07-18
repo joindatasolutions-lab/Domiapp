@@ -70,15 +70,43 @@ interface DomicilioListResponse {
 
 interface PedidoDisponible {
   id: number
+  idEntrega?: number | null
+  pedidoID?: number | null
+  produccionID?: number | null
   numeroPedido: string
+  codigoPedido?: string | null
+  arreglo?: string | null
+  nombreArreglo?: string | null
+  nombre_arreglo?: string | null
+  producto?: string | null
+  resumenProductos?: string | null
+  resumen_productos?: string | null
   cliente: string
+  destinatario?: string | null
   direccion: string | null
+  telefonoDestino?: string | null
+  telefonoDestinatario?: string | null
+  celularDestinatario?: string | null
   barrio?: string | null
+  nombreBarrio?: string | null
   zona?: string | null
+  nombreZona?: string | null
   horaEntrega?: string | null
   fechaEntregaProgramada?: string | null
+  latitudDestino?: number | null
+  longitudDestino?: number | null
+  imageUrl?: string | null
+  image_url?: string | null
+  imagenUrl?: string | null
+  imagen_url?: string | null
+  imagenProductoUrl?: string | null
+  imagen_producto_url?: string | null
   estado: 'SIN_ASIGNAR'
   prioridad: string | null
+  items?: unknown[] | null
+  productos?: unknown[] | string[] | null
+  detalle?: unknown[] | null
+  detalles?: unknown[] | null
 }
 
 interface PedidoAsignado {
@@ -101,6 +129,21 @@ interface PedidoAsignado {
 interface PedidoDevuelto {
   pedido?: PedidoDisponible | null
   contadores?: DomicilioContadores | null
+}
+
+interface BarrioApiItem {
+  barrioID?: number | null
+  idBarrio?: number | null
+  id?: number | null
+  nombreBarrio?: string | null
+  barrio?: string | null
+  nombre?: string | null
+  zonaID?: number | null
+  zonaId?: number | null
+  idZona?: number | null
+  nombreZona?: string | null
+  zonaNombre?: string | null
+  zona?: string | { nombre?: string | null; nombreZona?: string | null; descripcion?: string | null } | null
 }
 
 export interface DomicilioContadores {
@@ -159,6 +202,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const body = init.body
 
   Object.entries(authHeaders()).forEach(([key, value]) => headers.set(key, value))
+  if (!headers.has('Accept')) {
+    headers.set('Accept', 'application/json')
+  }
   if (body && !(body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
@@ -206,15 +252,56 @@ const statusFromApi = (status: string): OrderStatus => {
 
 const formatTime = (value?: string | null) => {
   if (!value) return '--:--'
-  if (/^\d{1,2}:\d{2}/.test(value)) return value.slice(0, 5)
+  const text = value.trim()
+  if (!text) return '--:--'
+  if (/^\d{1,2}:\d{2}/.test(text)) return text.slice(0, 5)
 
-  const date = new Date(value)
+  const date = new Date(text)
   if (Number.isNaN(date.getTime())) return '--:--'
 
   return date.toLocaleTimeString('es-CO', {
     hour: '2-digit',
     minute: '2-digit'
   })
+}
+
+const timeFromApi = (item: Record<string, unknown>) => {
+  const directTime = optionalText(
+    firstValue(
+      item.horaEntrega,
+      item.hora_entrega,
+      item.hora,
+      item.deliveryTime,
+      item.time,
+      (item.pedido as Record<string, unknown> | undefined)?.horaEntrega,
+      (item.pedido as Record<string, unknown> | undefined)?.hora,
+      (item.entrega as Record<string, unknown> | undefined)?.horaEntrega,
+      (item.entrega as Record<string, unknown> | undefined)?.hora
+    )
+  )
+
+  if (directTime) return formatTime(directTime)
+
+  return formatTime(
+    optionalText(
+      firstValue(
+        item.fechaEntregaProgramada,
+        item.fecha_entrega_programada,
+        item.fechaEntrega,
+        item.fecha_entrega,
+        item.fechaProgramada,
+        item.fecha_programada,
+        item.deliveryDate,
+        item.scheduledDeliveryDate,
+        item.scheduledAt,
+        item.createdAt,
+        (item.pedido as Record<string, unknown> | undefined)?.fechaEntregaProgramada,
+        (item.pedido as Record<string, unknown> | undefined)?.fechaEntrega,
+        (item.entrega as Record<string, unknown> | undefined)?.fechaEntregaProgramada,
+        (item.entrega as Record<string, unknown> | undefined)?.fechaEntrega
+      )
+    )
+  )
 }
 
 const optionalText = (value?: unknown) => {
@@ -273,7 +360,7 @@ const mapDomicilioToOrder = (item: DomicilioCourierCard): Order => {
     address: addressParts.join(', ') || 'Direccion no registrada',
     neighborhood,
     zone: zoneFromApi(item as unknown as Record<string, unknown>),
-    time: item.horaEntrega || formatTime(item.fechaEntregaProgramada),
+    time: timeFromApi(item as unknown as Record<string, unknown>),
     value: 0,
     earnings: 0,
     phone: item.telefonoDestino || '',
@@ -299,27 +386,32 @@ const mapDomicilioToOrder = (item: DomicilioCourierCard): Order => {
   }
 }
 
-const mapAvailablePedidoToOrder = (item: PedidoDisponible): Order => ({
-  id: String(item.id),
-  pedidoId: String(item.id),
-  number: item.numeroPedido,
-  customer: item.cliente || 'Cliente',
-  address: item.direccion || 'Direccion no registrada',
-  neighborhood: neighborhoodFromApi(item as unknown as Record<string, unknown>),
-  zone: zoneFromApi(item as unknown as Record<string, unknown>),
-  time: item.horaEntrega || formatTime(item.fechaEntregaProgramada),
-  value: 0,
-  earnings: 0,
-  phone: '',
-  status: 'SIN_ASIGNAR',
-  priority: item.prioridad || undefined,
-  items: fallbackOrderItem(item.id, item.numeroPedido),
-  paymentMethod: 'Transferencia',
-  currentLocation: { lat: 0, lng: 0 },
-  customerLocation: { lat: 0, lng: 0 },
-  etaMinutes: 0,
-  distanceKm: 0
-})
+const mapAvailablePedidoToOrder = (item: PedidoDisponible): Order => {
+  const arrangement = availableArrangementText(item)
+
+  return {
+    id: String(item.id),
+    pedidoId: String(item.pedidoID ?? item.id),
+    number: item.codigoPedido || item.numeroPedido,
+    customer: item.destinatario || item.cliente || 'Cliente',
+    address: item.direccion || 'Direccion no registrada',
+    neighborhood: neighborhoodFromApi(item as unknown as Record<string, unknown>),
+    zone: zoneFromApi(item as unknown as Record<string, unknown>),
+    time: timeFromApi(item as unknown as Record<string, unknown>),
+    value: 0,
+    earnings: 0,
+    phone: item.celularDestinatario || item.telefonoDestinatario || item.telefonoDestino || '',
+    status: 'SIN_ASIGNAR',
+    priority: item.prioridad || undefined,
+    arrangement,
+    items: availableProductItems(item),
+    paymentMethod: 'Transferencia',
+    currentLocation: { lat: 0, lng: 0 },
+    customerLocation: { lat: item.latitudDestino ?? 0, lng: item.longitudDestino ?? 0 },
+    etaMinutes: 0,
+    distanceKm: 0
+  }
+}
 
 const mapAssignedPedidoToOrder = (item: PedidoAsignado): Order => ({
   id: String(item.idEntrega),
@@ -329,7 +421,7 @@ const mapAssignedPedidoToOrder = (item: PedidoAsignado): Order => ({
   address: item.direccion || 'Direccion no registrada',
   neighborhood: neighborhoodFromApi(item as unknown as Record<string, unknown>),
   zone: zoneFromApi(item as unknown as Record<string, unknown>),
-  time: item.horaEntrega || formatTime(item.fechaEntregaProgramada),
+  time: timeFromApi(item as unknown as Record<string, unknown>),
   value: 0,
   earnings: 0,
   phone: '',
@@ -364,6 +456,115 @@ const normalizeImageUrl = (value?: unknown) => {
 const firstValue = (...values: unknown[]) =>
   values.find((value) => value !== null && value !== undefined && String(value).trim() !== '')
 
+const stripProductCode = (value: unknown) =>
+  optionalText(value)?.replace(/^\s*[A-Z]*\d+[A-Z0-9-]*\s*[-–—]\s*/i, '')
+
+const textField = (data: Record<string, unknown>, ...keys: string[]) => firstValue(...keys.map((key) => data[key]))
+
+const looseTextField = (data: Record<string, unknown>, ...keys: string[]) => {
+  const normalized = new Map(Object.entries(data).map(([key, value]) => [normalizeText(key), value]))
+  return firstValue(...keys.map((key) => normalized.get(normalizeText(key))))
+}
+
+const arrangementKeys = [
+  'arreglo',
+  'nombreArreglo',
+  'arregloNombre',
+  'nombre_arreglo',
+  'arreglo_nombre',
+  'producto',
+  'nombreProducto',
+  'productoNombre',
+  'nombre_producto',
+  'producto_nombre',
+  'descripcionProducto',
+  'productoDescripcion',
+  'descripcion_producto',
+  'producto_descripcion',
+  'resumenProductos',
+  'resumen_productos'
+]
+
+const arrangementTextField = (data: Record<string, unknown>) =>
+  firstValue(textField(data, ...arrangementKeys), looseTextField(data, ...arrangementKeys))
+
+const isUsefulArrangementKey = (key: string) => {
+  const normalized = normalizeText(key)
+  if (!/(arreglo|producto)/.test(normalized)) return false
+  return !/(id|codigo|code|sku|imagen|image|foto|url|precio|valor|cantidad|qty|subtotal|total)/.test(normalized)
+}
+
+const findArrangementText = (value: unknown, depth = 0): unknown => {
+  if (!value || depth > 4) return undefined
+  if (typeof value === 'string') return stripProductCode(value)
+  if (Array.isArray(value)) {
+    return firstValue(...value.map((item) => findArrangementText(item, depth + 1)))
+  }
+  if (typeof value !== 'object') return undefined
+
+  const data = value as Record<string, unknown>
+  const direct = arrangementTextField(data)
+  if (direct) return direct
+
+  const keyed = firstValue(
+    ...Object.entries(data)
+      .filter(([key]) => isUsefulArrangementKey(key))
+      .map(([, item]) => findArrangementText(item, depth + 1))
+  )
+  if (keyed) return keyed
+
+  return firstValue(...Object.values(data).map((item) => findArrangementText(item, depth + 1)))
+}
+
+const availableArrangementText = (item: PedidoDisponible) => {
+  const data = item as unknown as Record<string, unknown>
+  const pedido = (data.pedido as Record<string, unknown> | undefined) ?? {}
+  const produccion = (data.produccion as Record<string, unknown> | undefined) ?? {}
+  const entrega = (data.entrega as Record<string, unknown> | undefined) ?? {}
+  const products = Array.isArray(item.productos)
+    ? item.productos
+        .map((product) => {
+          if (typeof product === 'string') return product
+          const raw = product as Record<string, unknown>
+          return firstValue(arrangementTextField(raw), textField(raw, 'descripcion', 'description', 'name', 'nombre'))
+        })
+        .filter(Boolean)
+        .join(', ')
+    : typeof item.productos === 'string'
+      ? item.productos
+      : undefined
+
+  return stripProductCode(
+    firstValue(
+      arrangementTextField(data),
+      arrangementTextField(pedido),
+      arrangementTextField(produccion),
+      arrangementTextField(entrega),
+      products,
+      findArrangementText(data)
+    )
+  )
+}
+
+const availableProductItems = (item: PedidoDisponible): Order['items'] => {
+  const name = availableArrangementText(item)
+  const image = normalizeImageUrl(
+    firstValue(item.imageUrl, item.image_url, item.imagenUrl, item.imagen_url, item.imagenProductoUrl, item.imagen_producto_url)
+  )
+  const mappedItems = mapProductItems(item)
+
+  return name || image
+    ? [
+        {
+          id: String(item.id),
+          name: name || `Pedido ${item.codigoPedido || item.numeroPedido || item.id}`,
+          qty: 1,
+          image
+        }
+      ]
+    : mappedItems ?? fallbackOrderItem(item.id, item.codigoPedido || item.numeroPedido)
+}
+
 const productCollections = (data: any): unknown[] | null => {
   const candidates = [
     data?.items,
@@ -389,6 +590,14 @@ const mapProductItems = (data: any): Order['items'] | null => {
   if (!products) return null
 
   return products.map((raw, index) => {
+    if (typeof raw === 'string') {
+      return {
+        id: String(index),
+        name: stripProductCode(raw) || raw,
+        qty: 1
+      }
+    }
+
     const item = raw as any
     const product = item.producto ?? item.product ?? item.inventario ?? item.catalogo ?? {}
     const id = firstValue(
@@ -403,16 +612,50 @@ const mapProductItems = (data: any): Order['items'] | null => {
       index
     )
     const name = firstValue(
+      item.nombreArreglo,
+      item.producto,
+      item.nombreProducto,
       item.nombre,
       item.name,
       item.productoNombre,
       item.product_name,
       item.descripcion,
       item.description,
+      product.nombreArreglo,
+      product.producto,
+      product.nombreProducto,
       product.nombre,
       product.name,
       product.descripcion,
       `Producto ${index + 1}`
+    )
+    const code = optionalText(
+      firstValue(
+        item.codigo,
+        item.code,
+        item.referencia,
+        item.reference,
+        item.sku,
+        item.codigoProducto,
+        item.codigoCatalogo,
+        item.codigoArreglo,
+        item.productoCodigo,
+        item.product_code,
+        item.codProducto,
+        item.codigoInventario,
+        product.codigo,
+        product.code,
+        product.referencia,
+        product.reference,
+        product.sku,
+        product.codigoProducto,
+        product.codigoCatalogo,
+        product.codigoArreglo,
+        product.productoCodigo,
+        product.product_code,
+        product.codProducto,
+        product.codigoInventario
+      )
     )
     const qty = Number(firstValue(item.cantidad, item.qty, item.quantity, item.unidades, 1)) || 1
     const image = normalizeImageUrl(
@@ -438,8 +681,9 @@ const mapProductItems = (data: any): Order['items'] | null => {
 
     return {
       id: String(id),
-      name: String(name),
+      name: stripProductCode(name) || String(name),
       qty,
+      code,
       image
     }
   })
@@ -459,6 +703,56 @@ const normalizeText = (value: string) =>
     .replace(/[\u0300-\u036f]/g, '')
     .trim()
     .toLowerCase()
+
+const neighborhoodKey = (value?: string) => (value ? normalizeText(value) : '')
+
+const barrioNameFromApi = (item: BarrioApiItem) =>
+  optionalText(item.nombreBarrio ?? item.barrio ?? item.nombre)
+
+const barrioZoneFromApi = (item: BarrioApiItem) =>
+  textFromNested(
+    firstValue(
+      item.nombreZona,
+      item.zonaNombre,
+      item.zona,
+      item.zonaID,
+      item.zonaId,
+      item.idZona
+    )
+  )
+
+const fetchNeighborhoodZoneMap = async () => {
+  const sucursalID = getSession()?.user.sucursalID
+  if (!sucursalID) return new Map<string, string>()
+
+  try {
+    const response = await request<BarrioApiItem[] | { items?: BarrioApiItem[] }>(`/barrios?sucursalID=${sucursalID}`)
+    const items = Array.isArray(response) ? response : response.items ?? []
+
+    return items.reduce((map, item) => {
+      const neighborhood = barrioNameFromApi(item)
+      const zone = barrioZoneFromApi(item)
+      if (neighborhood && zone) map.set(neighborhoodKey(neighborhood), zone)
+      return map
+    }, new Map<string, string>())
+  } catch {
+    return new Map<string, string>()
+  }
+}
+
+const enrichOrdersWithZones = async (orders: Order[]) => {
+  const missingZone = orders.some((order) => !order.zone && order.neighborhood)
+  if (!missingZone) return orders
+
+  const zonesByNeighborhood = await fetchNeighborhoodZoneMap()
+  if (!zonesByNeighborhood.size) return orders
+
+  return orders.map((order) => {
+    if (order.zone || !order.neighborhood) return order
+    const zone = zonesByNeighborhood.get(neighborhoodKey(order.neighborhood))
+    return zone ? { ...order, zone } : order
+  })
+}
 
 const isStorePickupOrder = (order: Pick<Order, 'address' | 'customer'>) => {
   const address = normalizeText(order.address)
@@ -531,7 +825,7 @@ export const api = {
   fetchOrders: async (date?: string): Promise<Order[]> => {
     const params = buildDomiciliosQuery(date)
     const response = await request<DomicilioListResponse>(`/domicilios/mis-pedidos?${params}`)
-    return response.items.map(mapDomicilioToOrder)
+    return enrichOrdersWithZones(response.items.map(mapDomicilioToOrder))
   },
   fetchAvailableOrders: async (date?: string): Promise<Order[]> => {
     try {
@@ -545,28 +839,9 @@ export const api = {
         if (response.length < AVAILABLE_PAGE_SIZE) break
       }
 
-      return onlyAssignableDeliveryOrders(uniqueOrders(orders))
+      return enrichOrdersWithZones(onlyAssignableDeliveryOrders(uniqueOrders(orders)))
     } catch (error) {
-      if (!isNotFoundError(error)) throw error
-
-      const orders: Order[] = []
-
-      for (let page = 1; page <= MAX_AVAILABLE_PAGES; page += 1) {
-        const params = buildDomiciliosQuery(date, { page, pageSize: AVAILABLE_PAGE_SIZE })
-        const fallback = await request<DomicilioListResponse>(`/domicilios/pedidos-disponibles?${params}`)
-
-        orders.push(
-          ...fallback.items.map((item) => ({
-            ...mapDomicilioToOrder(item),
-            status: 'SIN_ASIGNAR' as const,
-            priority: item.prioridad || undefined
-          }))
-        )
-
-        if (fallback.items.length < AVAILABLE_PAGE_SIZE || orders.length >= fallback.total) break
-      }
-
-      return onlyAssignableDeliveryOrders(uniqueOrders(orders))
+      throw error
     }
   },
   fetchDomicilioCounters: async (date?: string): Promise<DomicilioContadores> => {
@@ -661,6 +936,10 @@ export const api = {
     } catch {
       return summary
     }
+  },
+  fetchOrderItems: async (pedidoId: string): Promise<Order['items'] | null> => {
+    const detail = await request<any>(`/pedido/${pedidoId}/detalle`)
+    return mapProductItems(detail)
   },
   updateOrderStatus: async (
     id: string,

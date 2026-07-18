@@ -19,6 +19,7 @@ import Card from '../components/ui/Card'
 import { useAvailableOrders, useDomicilioCounters, useOrders } from '../hooks/useOrders'
 import { cn, formatOrderNumber } from '../lib/utils'
 import { api, type DomicilioContadores } from '../services/api'
+import { useDeliveryStore } from '../store/deliveryStore'
 import { Order, OrderStatus } from '../types'
 
 type Tab = 'available' | 'assigned'
@@ -87,6 +88,21 @@ function orderNeighborhood(order: Order) {
   return parts[1]
 }
 
+function isFallbackArrangementName(name?: string) {
+  return !name || /^Pedido\s/i.test(name) || name === 'Arreglo sin especificar'
+}
+
+function orderArrangement(order: Order, items = order.items) {
+  if (order.arrangement) return order.arrangement
+  const item = items[0]
+  if (!item || isFallbackArrangementName(item.name)) return null
+  return item.name
+}
+
+function orderImage(order: Order, items = order.items) {
+  return items.find((item) => item.image)?.image || '/logo.png'
+}
+
 function fallbackCounters(assignedOrders: Order[], availableOrders: Order[]): DomicilioContadores {
   return {
     asignados: assignedOrders.filter((order) => order.status === 'ASIGNADO' || order.status === 'PENDIENTE').length,
@@ -111,6 +127,67 @@ function canReturnToAvailable(order: Order) {
   return order.status === 'ASIGNADO' || order.status === 'PENDIENTE' || order.status === 'RETRASADO'
 }
 
+function AvailableOrderArticle({
+  order,
+  note,
+  isAssigning,
+  onAssign
+}: {
+  order: Order
+  note: string | null
+  isAssigning: boolean
+  onAssign: (order: Order) => void
+}) {
+  const items = order.items
+  const arrangement = orderArrangement(order, items)
+  const imageAlt = arrangement || formatOrderNumber(order.number)
+
+  return (
+    <article className="grid w-full grid-cols-[56px_minmax(0,1fr)] gap-3 border-t border-black/10 px-4 py-4 text-left">
+      <img
+        src={orderImage(order, items)}
+        alt={imageAlt}
+        className="mt-1 h-12 w-12 rounded-xl object-cover ring-1 ring-black/10"
+      />
+
+      <div className="min-w-0">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3">
+          <p className="truncate text-lg font-black text-ink">{formatOrderNumber(order.number)}</p>
+          <p className="text-sm font-bold text-muted">{order.time}</p>
+        </div>
+        <p className="mt-1 truncate text-sm font-black text-ink">{order.customer}</p>
+        {arrangement ? (
+          <p className="mt-0.5 line-clamp-2 text-sm font-semibold leading-5 text-ink/80">Arreglo: {arrangement}</p>
+        ) : null}
+        <p className="mt-0.5 line-clamp-2 text-sm font-semibold leading-5 text-ink/80">{order.address}</p>
+        <p className="mt-1 line-clamp-2 text-xs font-bold leading-5 text-muted">
+          Zona: {order.zone || 'Sin zona'}
+          <span className="mx-1 text-black/30">|</span>
+          Barrio: {orderNeighborhood(order) || 'Sin barrio'}
+        </p>
+        {note ? (
+          <p className="mt-2 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-1 text-xs font-black text-primary">
+            <AlertTriangle size={12} />
+            {note}
+          </p>
+        ) : null}
+        <Button
+          onClick={(event) => {
+            event.stopPropagation()
+            onAssign(order)
+          }}
+          disabled={isAssigning}
+          className="mt-3 h-10 rounded-xl px-4"
+          size="sm"
+        >
+          <Hand size={16} />
+          {isAssigning ? 'Asignando...' : 'Asignarme'}
+        </Button>
+      </div>
+    </article>
+  )
+}
+
 function todayInputValue() {
   const now = new Date()
   const offset = now.getTimezoneOffset() * 60000
@@ -124,6 +201,7 @@ export default function Dashboard() {
   const [assignmentMessage, setAssignmentMessage] = useState<string | null>(null)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const setActiveOrder = useDeliveryStore((state) => state.setActiveOrder)
   const date = selectedDate || undefined
   const user = api.getSession()?.user
   const userName = user?.nombre || user?.login || 'Domiciliario'
@@ -176,6 +254,7 @@ export default function Dashboard() {
       return { previousAvailable }
     },
     onSuccess: ({ order, counters: nextCounters }) => {
+      setActiveOrder(order)
       queryClient.setQueryData<Order[]>(assignedCacheKey, (current) => {
         const existing = current ?? assignedOrders
         return existing.some((item) => item.id === order.id) ? existing : [order, ...existing]
@@ -185,7 +264,6 @@ export default function Dashboard() {
         queryClient.setQueryData(countersCacheKey, nextCounters)
       }
 
-      setActiveTab('assigned')
       queryClient.invalidateQueries({ queryKey: ['orders'] })
       queryClient.invalidateQueries({ queryKey: ['available-orders'] })
       queryClient.invalidateQueries({ queryKey: ['domicilio-counters'] })
@@ -396,7 +474,13 @@ export default function Dashboard() {
 
       {activeOrder ? (
         <div className="px-4 pb-3">
-          <Button onClick={() => navigate('/ruta')} className="h-12 w-full rounded-xl">
+          <Button
+            onClick={() => {
+              setActiveOrder(activeOrder)
+              navigate('/ruta')
+            }}
+            className="h-12 w-full rounded-xl"
+          >
             <MapPinned size={18} />
             Ver ruta sugerida
           </Button>
@@ -408,8 +492,21 @@ export default function Dashboard() {
           filteredList.length ? (
           filteredList.map((order, index) => {
             const note = orderNote(order)
+            const isAvailable = activeTab === 'available' && order.status === 'SIN_ASIGNAR'
             const isAssigning = assignMutation.isPending && assignMutation.variables?.id === order.id
             const isReturning = returnMutation.isPending && returnMutation.variables?.id === order.id
+
+            if (isAvailable) {
+              return (
+                <AvailableOrderArticle
+                  key={order.id}
+                  order={order}
+                  note={note}
+                  isAssigning={isAssigning}
+                  onAssign={(nextOrder) => assignMutation.mutate(nextOrder)}
+                />
+              )
+            }
 
             return (
               <article

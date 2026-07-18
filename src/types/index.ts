@@ -5,6 +5,7 @@ export interface OrderItem {
   id: string
   name: string
   qty: number
+  code?: string
   image?: string
 }
 
@@ -27,6 +28,7 @@ export interface Order {
   phone: string
   status: OrderStatus
   priority?: string
+  arrangement?: string
   items: OrderItem[]
   paymentMethod: PaymentMethod
   currentLocation: Coordinates
