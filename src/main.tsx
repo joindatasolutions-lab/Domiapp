@@ -22,7 +22,6 @@ import {
   Menu,
   Navigation,
   Package,
-  PenLine,
   Phone,
   Radio,
   Settings,
@@ -987,6 +986,7 @@ function AvailableOrdersScreen({
   const [proofPedido, setProofPedido] = useState<PedidoDisponible | null>(null)
   const [proofPhotoUrl, setProofPhotoUrl] = useState<string | null>(null)
   const [proofRecipientName, setProofRecipientName] = useState('')
+  const [hasProofSignature, setHasProofSignature] = useState(false)
   const [novedadPedido, setNovedadPedido] = useState<PedidoDisponible | null>(null)
   const [novedadType, setNovedadType] = useState(NOVEDAD_OPTIONS[0].value)
   const [novedadDescription, setNovedadDescription] = useState('')
@@ -1011,6 +1011,8 @@ function AvailableOrdersScreen({
   const [novedadesError, setNovedadesError] = useState<string | null>(null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
   const proofPhotoInputRef = useRef<HTMLInputElement | null>(null)
+  const proofSignatureCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const isDrawingProofSignatureRef = useRef(false)
   const novedadPhotoInputRef = useRef<HTMLInputElement | null>(null)
   const resolveEvidenceInputRef = useRef<HTMLInputElement | null>(null)
   const profilePhotoInputRef = useRef<HTMLInputElement | null>(null)
@@ -1145,6 +1147,36 @@ function AvailableOrdersScreen({
       abortLoad.current = true
     }
   }, [mainTab, session.access_token, novedadesEstado, novedadesPeriodo, novedadesSearchTerm, novedadesRefreshKey])
+
+  useEffect(() => {
+    const canvas = proofSignatureCanvasRef.current
+    if (!proofPedido || !canvas) return
+
+    const resizeSignatureCanvas = () => {
+      const { width, height } = canvas.getBoundingClientRect()
+      const pixelRatio = window.devicePixelRatio || 1
+      canvas.width = Math.max(1, Math.floor(width * pixelRatio))
+      canvas.height = Math.max(1, Math.floor(height * pixelRatio))
+
+      const context = canvas.getContext('2d')
+      if (!context) return
+
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
+      context.clearRect(0, 0, width, height)
+      context.lineWidth = 3
+      context.lineCap = 'round'
+      context.lineJoin = 'round'
+      context.strokeStyle = '#26212a'
+    }
+
+    resizeSignatureCanvas()
+    setHasProofSignature(false)
+    window.addEventListener('resize', resizeSignatureCanvas)
+
+    return () => {
+      window.removeEventListener('resize', resizeSignatureCanvas)
+    }
+  }, [proofPedido])
 
   const handleAsignarme = async (numeroPedido: number | null) => {
     if (!numeroPedido) {
@@ -1329,6 +1361,7 @@ function AvailableOrdersScreen({
     setProofPedido(pedido)
     setProofPhotoUrl(pedido.imagen_arreglo || pedido.imagenes_arreglo?.[0] || APP_LOGO_URL)
     setProofRecipientName('')
+    setHasProofSignature(false)
   }
 
   const handleProofPhotoChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1336,6 +1369,66 @@ function AvailableOrdersScreen({
     if (!file) return
 
     setProofPhotoUrl(URL.createObjectURL(file))
+  }
+
+  const getProofSignaturePoint = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = proofSignatureCanvasRef.current
+    if (!canvas) return null
+
+    const canvasBox = canvas.getBoundingClientRect()
+    return {
+      x: event.clientX - canvasBox.left,
+      y: event.clientY - canvasBox.top
+    }
+  }
+
+  const handleProofSignatureStart = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = proofSignatureCanvasRef.current
+    const point = getProofSignaturePoint(event)
+    if (!canvas || !point) return
+
+    event.preventDefault()
+    canvas.setPointerCapture(event.pointerId)
+    isDrawingProofSignatureRef.current = true
+
+    const context = canvas.getContext('2d')
+    if (!context) return
+
+    context.beginPath()
+    context.moveTo(point.x, point.y)
+    setHasProofSignature(true)
+  }
+
+  const handleProofSignatureMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!isDrawingProofSignatureRef.current) return
+
+    const point = getProofSignaturePoint(event)
+    const context = proofSignatureCanvasRef.current?.getContext('2d')
+    if (!point || !context) return
+
+    event.preventDefault()
+    context.lineTo(point.x, point.y)
+    context.stroke()
+  }
+
+  const handleProofSignatureEnd = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = proofSignatureCanvasRef.current
+    isDrawingProofSignatureRef.current = false
+
+    if (canvas?.hasPointerCapture(event.pointerId)) {
+      canvas.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  const handleClearProofSignature = () => {
+    const canvas = proofSignatureCanvasRef.current
+    const context = canvas?.getContext('2d')
+    if (!canvas || !context) return
+
+    const { width, height } = canvas.getBoundingClientRect()
+    context.clearRect(0, 0, width, height)
+    isDrawingProofSignatureRef.current = false
+    setHasProofSignature(false)
   }
 
   const handleConfirmDeliveryProof = async () => {
@@ -2862,20 +2955,34 @@ function AvailableOrdersScreen({
                   className="sr-only"
                   onChange={handleProofPhotoChange}
                 />
-                <button type="button" className="proof-link-action" onClick={() => proofPhotoInputRef.current?.click()}>
+                <button
+                  type="button"
+                  className="proof-link-action"
+                  aria-label="Tomar foto de entrega con la camara"
+                  onClick={() => proofPhotoInputRef.current?.click()}
+                >
                   <Camera size={16} />
-                  Cambiar foto
+                  Tomar foto
                 </button>
               </section>
 
               <section className="proof-section">
                 <div className="proof-section-heading">
                   <h2>Firma del recibido</h2>
-                  <button type="button">Limpiar</button>
+                  <button type="button" disabled={!hasProofSignature} onClick={handleClearProofSignature}>
+                    Limpiar
+                  </button>
                 </div>
                 <div className="signature-pad" aria-label="Firma capturada">
-                  <PenLine size={22} />
-                  <span />
+                  <canvas
+                    ref={proofSignatureCanvasRef}
+                    aria-label="Espacio para firmar"
+                    onPointerDown={handleProofSignatureStart}
+                    onPointerMove={handleProofSignatureMove}
+                    onPointerUp={handleProofSignatureEnd}
+                    onPointerCancel={handleProofSignatureEnd}
+                    onLostPointerCapture={handleProofSignatureEnd}
+                  />
                 </div>
               </section>
 
