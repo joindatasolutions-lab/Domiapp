@@ -1,5 +1,6 @@
 import React, { FormEvent, useEffect, useRef, useState } from 'react'
 import ReactDOM from 'react-dom/client'
+import petalOpsLogoUrl from '../img/logo.png'
 import {
   Bike,
   CalendarDays,
@@ -16,7 +17,6 @@ import {
   LayoutList,
   LockKeyhole,
   LogOut,
-  Map,
   MapPin,
   MessageSquare,
   Menu,
@@ -27,7 +27,6 @@ import {
   Radio,
   Settings,
   ShieldCheck,
-  Star,
   GripVertical,
   Hand,
   Search,
@@ -40,9 +39,28 @@ const LOCAL_API_URL = import.meta.env.VITE_API_LOCAL_BASE_URL || 'http://127.0.0
 const PRODUCTION_API_URL = import.meta.env.VITE_API_PRODUCTION_BASE_URL || 'https://domicilios-708265049038.us-central1.run.app/api/v1'
 const API_TARGET = import.meta.env.VITE_API_TARGET === 'local' ? 'local' : 'production'
 const API_URL = import.meta.env.VITE_API_BASE_URL || (API_TARGET === 'local' ? LOCAL_API_URL : PRODUCTION_API_URL)
+const APP_LOGO_URL = petalOpsLogoUrl
 const SESSION_KEY = 'domiapp.session'
+const TENANT_KEY = 'tenant'
+const EMPRESA_ID_KEY = 'empresa_id'
+const SUCURSAL_ID_KEY = 'sucursal_id'
+const TOKEN_KEY = 'token'
+const LOGIN_TIMEOUT_MS = 20000
 
 type DeliveryStepKey = 'asignado' | 'en_ruta' | 'entregado'
+type HistorialPeriodo = 'hoy' | 'semana' | 'mes' | 'anio' | 'todos'
+type NovedadEstado = 'abierta' | 'resuelta' | 'cancelada' | 'todas'
+type ResolveNovedadAction = 'entregar' | 'reintentar' | 'devolver'
+
+interface TenantInfo {
+  empresa_id?: number | null
+  nombre?: string | null
+  nombre_comercial?: string | null
+  nombre_empresa?: string | null
+  razon_social?: string | null
+  slug?: string | null
+  logo_url?: string | null
+}
 
 const NOVEDAD_OPTIONS = [
   { label: 'Cliente no disponible', value: 'cliente_no_disponible' },
@@ -61,12 +79,7 @@ interface Domiciliario {
   email: string | null
   cargo: string
   foto_url?: string | null
-  tenant?: {
-    logo_url?: string | null
-    nombre?: string | null
-    nombre_empresa?: string | null
-    razon_social?: string | null
-  } | null
+  tenant?: TenantInfo | null
 }
 
 interface AuthSession {
@@ -123,17 +136,130 @@ interface PedidoDisponible {
   evidenciafotourl?: string | null
 }
 
+type PedidoHistorial = {
+  numero_pedido: number | null
+  cliente: string | null
+  destinatario: string | null
+  telefono_destinatario: string | null
+  arreglo: string | null
+  imagen_arreglo: string | null
+  imagenes_arreglo: string[]
+  direccion: string | null
+  barrio: string | null
+  fecha_asignacion: string | null
+  fecha_entrega: string | null
+  hora_asignado: string | null
+  hora_entregado: string | null
+  estado_final: 'entregado' | 'con_novedad' | 'cancelado' | 'reasignado' | string
+  novedad: string | null
+  novedades: {
+    accion: string | null
+    estado_anterior: string | null
+    estado_nuevo: string | null
+    detalle: string | null
+    registrada_en: string | null
+  }[]
+  evidencia_entrega_url: string | null
+  evidencia_firma_url: string | null
+  observaciones: string | null
+}
+
+type Novedad = {
+  id_novedad: number
+  numero_pedido: number | null
+  cliente: string | null
+  destinatario: string | null
+  telefono_destinatario: string | null
+  arreglo: string | null
+  imagen_arreglo: string | null
+  imagenes_arreglo: string[]
+  direccion: string | null
+  barrio: string | null
+  zona: string | null
+  tipo_novedad: string | null
+  descripcion: string | null
+  motivo: string | null
+  evidencia_foto_url: string | null
+  estado_novedad: 'abierta' | 'resuelta' | 'cancelada'
+  estado_pedido: string | null
+  reportada_en: string | null
+  resuelta_en: string | null
+  puede_reintentar: boolean
+  puede_contactar_cliente: boolean
+}
+
+const HISTORIAL_FILTROS: { label: string; value: HistorialPeriodo }[] = [
+  { label: 'Hoy', value: 'hoy' },
+  { label: 'Esta semana', value: 'semana' },
+  { label: 'Este mes', value: 'mes' },
+  { label: 'Todos', value: 'todos' }
+]
+
+const HISTORIAL_ESTADO_LABEL: Record<string, string> = {
+  entregado: 'Entregado',
+  con_novedad: 'Con novedad',
+  cancelado: 'Cancelado',
+  reasignado: 'Reasignado'
+}
+
+const NOVEDAD_ESTADO_FILTROS: { label: string; value: NovedadEstado }[] = [
+  { label: 'Abiertas', value: 'abierta' },
+  { label: 'Resueltas', value: 'resuelta' },
+  { label: 'Canceladas', value: 'cancelada' },
+  { label: 'Todas', value: 'todas' }
+]
+
+const NOVEDAD_PERIODO_FILTROS: { label: string; value: HistorialPeriodo }[] = [
+  { label: 'Hoy', value: 'hoy' },
+  { label: 'Esta semana', value: 'semana' },
+  { label: 'Este mes', value: 'mes' }
+]
+
+const RESOLVE_NOVEDAD_ACTIONS: {
+  value: ResolveNovedadAction
+  label: string
+  description: string
+  solucion: string
+  nuevo_estado_pedido: 'entregado' | 'asignado' | 'pendiente'
+}[] = [
+  {
+    value: 'entregar',
+    label: 'Entregar pedido',
+    description: 'Cierra la novedad y marca el pedido como entregado.',
+    solucion: 'Pedido entregado después de resolver la novedad',
+    nuevo_estado_pedido: 'entregado'
+  },
+  {
+    value: 'reintentar',
+    label: 'Reintentar entrega',
+    description: 'El pedido vuelve a Mis pedidos para continuar la ruta.',
+    solucion: 'Cliente contactado, se reintentará la entrega',
+    nuevo_estado_pedido: 'asignado'
+  },
+  {
+    value: 'devolver',
+    label: 'Devolver a disponibles',
+    description: 'El pedido vuelve a la bolsa de pedidos disponibles.',
+    solucion: 'No fue posible entregar, se devuelve a disponibles',
+    nuevo_estado_pedido: 'pendiente'
+  }
+]
+
 async function loginDomiciliario(usuario: string, password: string) {
+  const abortController = new AbortController()
+  const timeoutId = window.setTimeout(() => abortController.abort(), LOGIN_TIMEOUT_MS)
+
   const response = await fetch(`${API_URL}/auth/domiciliarios/login`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
+    signal: abortController.signal,
     body: JSON.stringify({
       usuario,
       password
     })
-  })
+  }).finally(() => window.clearTimeout(timeoutId))
 
   if (!response.ok) {
     throw new Error('Usuario o contraseña inválidos')
@@ -189,6 +315,36 @@ function normalizePedidosResponse(data: unknown) {
   return []
 }
 
+function normalizeHistorialResponse(data: unknown) {
+  if (Array.isArray(data)) return data as PedidoHistorial[]
+  if (data && typeof data === 'object' && Array.isArray((data as { items?: unknown }).items)) {
+    return (data as { items: PedidoHistorial[] }).items
+  }
+  if (data && typeof data === 'object' && Array.isArray((data as { historial?: unknown }).historial)) {
+    return (data as { historial: PedidoHistorial[] }).historial
+  }
+  if (data && typeof data === 'object' && Array.isArray((data as { pedidos?: unknown }).pedidos)) {
+    return (data as { pedidos: PedidoHistorial[] }).pedidos
+  }
+
+  return []
+}
+
+function normalizeNovedadesResponse(data: unknown) {
+  if (Array.isArray(data)) return data as Novedad[]
+  if (data && typeof data === 'object' && Array.isArray((data as { items?: unknown }).items)) {
+    return (data as { items: Novedad[] }).items
+  }
+  if (data && typeof data === 'object' && Array.isArray((data as { novedades?: unknown }).novedades)) {
+    return (data as { novedades: Novedad[] }).novedades
+  }
+  if (data && typeof data === 'object' && Array.isArray((data as { data?: unknown }).data)) {
+    return (data as { data: Novedad[] }).data
+  }
+
+  return []
+}
+
 function pedidosQueryParams(fechaEntrega: string, empresaId?: number, sucursalId?: number | null) {
   const params = new URLSearchParams({
     limit: '100',
@@ -238,6 +394,104 @@ async function getPedidosAsignados(token: string, fechaEntrega: string, empresaI
 
   const data = await response.json()
   return normalizePedidosResponse(data)
+}
+
+async function getPedidosHistorial(
+  token: string,
+  periodo: HistorialPeriodo,
+  q: string,
+  limit = 50,
+  offset = 0
+) {
+  const params = new URLSearchParams({
+    periodo,
+    limit: String(limit),
+    offset: String(offset)
+  })
+  const searchValue = q.trim()
+
+  if (searchValue) {
+    params.set('q', searchValue)
+  }
+
+  const response = await fetch(`${API_URL}/pedidos/historial?${params}`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  })
+
+  if (!response.ok) {
+    throw new Error('No se pudo cargar el historial')
+  }
+
+  const data = await response.json()
+  return normalizeHistorialResponse(data)
+}
+
+async function getNovedades(
+  token: string,
+  estado: NovedadEstado,
+  periodo: HistorialPeriodo,
+  q: string,
+  limit = 50,
+  offset = 0
+) {
+  const params = new URLSearchParams({
+    estado,
+    periodo,
+    limit: String(limit),
+    offset: String(offset)
+  })
+  const searchValue = q.trim()
+
+  if (searchValue) {
+    params.set('q', searchValue)
+  }
+
+  const response = await fetch(`${API_URL}/pedidos/novedades?${params}`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  })
+
+  if (!response.ok) {
+    throw new Error('No se pudieron cargar las novedades')
+  }
+
+  const data = await response.json()
+  return normalizeNovedadesResponse(data)
+}
+
+async function resolverNovedad(
+  token: string,
+  numeroPedido: number,
+  idNovedad: number,
+  payload: {
+    solucion: string
+    observaciones?: string
+    nuevo_estado_pedido?: 'entregado' | 'asignado' | 'en_ruta' | 'pendiente'
+    evidencia_foto_url?: string
+    firma_nombre?: string
+    firma_documento?: string
+    firma_imagen_url?: string
+  }
+) {
+  const response = await fetch(`${API_URL}/pedidos/${numeroPedido}/novedades/${idNovedad}/resolver`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  })
+
+  const data = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(data?.detail || 'No se pudo resolver la novedad')
+  }
+
+  return data
 }
 
 function sucursalQueryParam(sucursalId?: number | null) {
@@ -581,6 +835,20 @@ function loadSession() {
 
 function saveSession(session: AuthSession) {
   localStorage.setItem(SESSION_KEY, JSON.stringify(session))
+  localStorage.setItem(TOKEN_KEY, session.access_token)
+  localStorage.setItem(EMPRESA_ID_KEY, String(session.domiciliario.empresa_id))
+
+  if (session.domiciliario.sucursal_id != null) {
+    localStorage.setItem(SUCURSAL_ID_KEY, String(session.domiciliario.sucursal_id))
+  } else {
+    localStorage.removeItem(SUCURSAL_ID_KEY)
+  }
+
+  if (session.domiciliario.tenant) {
+    localStorage.setItem(TENANT_KEY, JSON.stringify(session.domiciliario.tenant))
+  } else {
+    localStorage.removeItem(TENANT_KEY)
+  }
 }
 
 function LoginScreen({ onLogin }: { onLogin: (session: AuthSession) => void }) {
@@ -600,6 +868,11 @@ function LoginScreen({ onLogin }: { onLogin: (session: AuthSession) => void }) {
       saveSession(session)
       onLogin(session)
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setError('El servidor tardo demasiado en responder. Intenta nuevamente.')
+        return
+      }
+
       setError(err instanceof Error ? err.message : 'No fue posible iniciar sesión')
     } finally {
       setIsSubmitting(false)
@@ -615,7 +888,7 @@ function LoginScreen({ onLogin }: { onLogin: (session: AuthSession) => void }) {
         <div className="login-content">
           <header className="brand">
             <div className="brand-mark">
-              <img src="/img/logo.png" alt="PetalOps" />
+              <img src={APP_LOGO_URL} alt="PetalOps" />
             </div>
             <h1>PetalOps</h1>
             <p className="product-label">DomiApp</p>
@@ -686,8 +959,19 @@ function AvailableOrdersScreen({
 }) {
   const [pedidos, setPedidos] = useState<PedidoDisponible[]>([])
   const [misPedidos, setMisPedidos] = useState<PedidoDisponible[]>([])
+  const [historialPedidos, setHistorialPedidos] = useState<PedidoHistorial[]>([])
+  const [novedades, setNovedades] = useState<Novedad[]>([])
   const [mainTab, setMainTab] = useState<'ordenes' | 'mapa' | 'historial' | 'perfil'>('ordenes')
+  const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'disponibles' | 'mis-pedidos'>('disponibles')
+  const [novedadesEstado, setNovedadesEstado] = useState<NovedadEstado>('abierta')
+  const [novedadesPeriodo, setNovedadesPeriodo] = useState<HistorialPeriodo>('hoy')
+  const [novedadesSearchTerm, setNovedadesSearchTerm] = useState('')
+  const [novedadesRefreshKey, setNovedadesRefreshKey] = useState(0)
+  const [historialPeriodo, setHistorialPeriodo] = useState<HistorialPeriodo>('mes')
+  const [historialSearchTerm, setHistorialSearchTerm] = useState('')
+  const [historialDateFilter, setHistorialDateFilter] = useState(todayInputValue)
+  const [historialRefreshKey, setHistorialRefreshKey] = useState(0)
   const [selectedDate, setSelectedDate] = useState(todayInputValue)
   const [showAllDates, setShowAllDates] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -708,15 +992,27 @@ function AvailableOrdersScreen({
   const [novedadDescription, setNovedadDescription] = useState('')
   const [novedadPhotoUrl, setNovedadPhotoUrl] = useState<string | null>(null)
   const [savingNovedadPedido, setSavingNovedadPedido] = useState<number | null>(null)
+  const [resolvingNovedad, setResolvingNovedad] = useState<Novedad | null>(null)
+  const [resolveAction, setResolveAction] = useState<ResolveNovedadAction>('entregar')
+  const [resolveObservations, setResolveObservations] = useState('')
+  const [resolveEvidenceUrl, setResolveEvidenceUrl] = useState<string | null>(null)
+  const [resolveSignatureName, setResolveSignatureName] = useState('')
+  const [resolveSignatureDocument, setResolveSignatureDocument] = useState('')
+  const [savingResolveNovedadId, setSavingResolveNovedadId] = useState<number | null>(null)
   const [profilePhotoPreviewUrl, setProfilePhotoPreviewUrl] = useState<string | null>(null)
   const [isUploadingProfilePhoto, setIsUploadingProfilePhoto] = useState(false)
   const [localPedidosEnCurso, setLocalPedidosEnCurso] = useState<PedidoDisponible[]>([])
   const [routeOrder, setRouteOrder] = useState<string[]>([])
   const [dragState, setDragState] = useState<{ key: string; startY: number; currentY: number } | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [isLoadingHistorial, setIsLoadingHistorial] = useState(false)
+  const [isLoadingNovedades, setIsLoadingNovedades] = useState(false)
+  const [historialError, setHistorialError] = useState<string | null>(null)
+  const [novedadesError, setNovedadesError] = useState<string | null>(null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
   const proofPhotoInputRef = useRef<HTMLInputElement | null>(null)
   const novedadPhotoInputRef = useRef<HTMLInputElement | null>(null)
+  const resolveEvidenceInputRef = useRef<HTMLInputElement | null>(null)
   const profilePhotoInputRef = useRef<HTMLInputElement | null>(null)
   const activeEmpresaId = session.domiciliario.empresa_id
   const activeSucursalId = session.domiciliario.sucursal_id
@@ -770,6 +1066,85 @@ function AvailableOrdersScreen({
 
     return () => window.clearTimeout(timeoutId)
   }, [assignSuccess])
+
+  useEffect(() => {
+    if (mainTab !== 'historial') return
+
+    const abortLoad = { current: false }
+
+    const loadHistorial = async () => {
+      setIsLoadingHistorial(true)
+      setHistorialError(null)
+
+      try {
+        const nextHistorial = await getPedidosHistorial(
+          session.access_token,
+          historialPeriodo,
+          historialSearchTerm,
+          50,
+          0
+        )
+
+        if (!abortLoad.current) {
+          setHistorialPedidos(nextHistorial)
+        }
+      } catch (err) {
+        if (!abortLoad.current) {
+          setHistorialError(err instanceof Error ? err.message : 'No se pudo cargar el historial')
+        }
+      } finally {
+        if (!abortLoad.current) {
+          setIsLoadingHistorial(false)
+        }
+      }
+    }
+
+    loadHistorial()
+
+    return () => {
+      abortLoad.current = true
+    }
+  }, [mainTab, session.access_token, historialPeriodo, historialSearchTerm, historialRefreshKey])
+
+  useEffect(() => {
+    if (mainTab !== 'mapa') return
+
+    const abortLoad = { current: false }
+
+    const loadNovedades = async () => {
+      setIsLoadingNovedades(true)
+      setNovedadesError(null)
+
+      try {
+        const nextNovedades = await getNovedades(
+          session.access_token,
+          novedadesEstado,
+          novedadesPeriodo,
+          novedadesSearchTerm,
+          50,
+          0
+        )
+
+        if (!abortLoad.current) {
+          setNovedades(nextNovedades)
+        }
+      } catch (err) {
+        if (!abortLoad.current) {
+          setNovedadesError(err instanceof Error ? err.message : 'No se pudieron cargar las novedades')
+        }
+      } finally {
+        if (!abortLoad.current) {
+          setIsLoadingNovedades(false)
+        }
+      }
+    }
+
+    loadNovedades()
+
+    return () => {
+      abortLoad.current = true
+    }
+  }, [mainTab, session.access_token, novedadesEstado, novedadesPeriodo, novedadesSearchTerm, novedadesRefreshKey])
 
   const handleAsignarme = async (numeroPedido: number | null) => {
     if (!numeroPedido) {
@@ -952,7 +1327,7 @@ function AvailableOrdersScreen({
 
   const openDeliveryProof = (pedido: PedidoDisponible) => {
     setProofPedido(pedido)
-    setProofPhotoUrl(pedido.imagen_arreglo || pedido.imagenes_arreglo?.[0] || '/img/logo.png')
+    setProofPhotoUrl(pedido.imagen_arreglo || pedido.imagenes_arreglo?.[0] || APP_LOGO_URL)
     setProofRecipientName('')
   }
 
@@ -1120,10 +1495,6 @@ function AvailableOrdersScreen({
   const noEntregadosPedidos = misPedidosPorFecha.filter((pedido) => {
     return normalizedDeliveryStatus(pedido.estado_entrega) === 'no_entregado'
   })
-  const completedPedidosCount = entregadosPedidos.length + noEntregadosPedidos.length
-  const effectivenessRate = completedPedidosCount
-    ? Math.round((entregadosPedidos.length / completedPedidosCount) * 100)
-    : 100
   const profileInitials = session.domiciliario.nombre_empleado
     .split(' ')
     .filter(Boolean)
@@ -1131,7 +1502,8 @@ function AvailableOrdersScreen({
     .map((namePart) => namePart[0]?.toUpperCase())
     .join('') || 'D'
   const tenantLogoUrl = session.domiciliario.tenant?.logo_url || null
-  const tenantName = session.domiciliario.tenant?.nombre ||
+  const tenantName = session.domiciliario.tenant?.nombre_comercial ||
+    session.domiciliario.tenant?.nombre ||
     session.domiciliario.tenant?.nombre_empresa ||
     session.domiciliario.tenant?.razon_social ||
     'Empresa'
@@ -1193,6 +1565,16 @@ function AvailableOrdersScreen({
       !['entregado', 'no_entregado', 'cancelado'].includes(normalizedDeliveryStatus(pedido.estado_entrega))
     )
     : null
+  const filteredHistorialPedidos = historialDateFilter
+    ? historialPedidos.filter((pedido) =>
+      dateOnly(pedido.fecha_entrega) === historialDateFilter ||
+      dateOnly(pedido.fecha_asignacion) === historialDateFilter
+    )
+    : historialPedidos
+  const historialEntregadosCount = filteredHistorialPedidos.filter((pedido) => pedido.estado_final === 'entregado').length
+  const historialNovedadesCount = filteredHistorialPedidos.filter((pedido) =>
+    ['con_novedad', 'cancelado', 'reasignado'].includes(pedido.estado_final)
+  ).length
 
   const movePedidoToIndex = (draggedKey: string, targetIndex: number) => {
     setRouteOrder((currentOrder) => {
@@ -1242,17 +1624,87 @@ function AvailableOrdersScreen({
     setDragState(null)
   }
 
+  const openResolveNovedad = (novedad: Novedad) => {
+    setResolvingNovedad(novedad)
+    setResolveAction('entregar')
+    setResolveObservations('')
+    setResolveEvidenceUrl(null)
+    setResolveSignatureName('')
+    setResolveSignatureDocument('')
+    setAssignError(null)
+  }
+
+  const handleResolveEvidenceChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    setResolveEvidenceUrl(URL.createObjectURL(file))
+  }
+
+  const handleResolveNovedad = async () => {
+    if (!resolvingNovedad?.numero_pedido) {
+      setAssignError('La novedad no tiene pedido asociado')
+      return
+    }
+
+    const selectedAction = RESOLVE_NOVEDAD_ACTIONS.find((action) => action.value === resolveAction) || RESOLVE_NOVEDAD_ACTIONS[0]
+
+    setSavingResolveNovedadId(resolvingNovedad.id_novedad)
+    setAssignError(null)
+
+    try {
+      await resolverNovedad(
+        session.access_token,
+        resolvingNovedad.numero_pedido,
+        resolvingNovedad.id_novedad,
+        {
+          solucion: selectedAction.solucion,
+          observaciones: resolveObservations.trim() || undefined,
+          nuevo_estado_pedido: selectedAction.nuevo_estado_pedido,
+          evidencia_foto_url: resolveAction === 'entregar' ? resolveEvidenceUrl || undefined : undefined,
+          firma_nombre: resolveAction === 'entregar' ? resolveSignatureName.trim() || undefined : undefined,
+          firma_documento: resolveAction === 'entregar' ? resolveSignatureDocument.trim() || undefined : undefined
+        }
+      )
+
+      setResolvingNovedad(null)
+      setNovedadesRefreshKey((currentKey) => currentKey + 1)
+      if (selectedAction.nuevo_estado_pedido === 'asignado') {
+        setMainTab('ordenes')
+        setActiveTab('mis-pedidos')
+        await loadOrders()
+      }
+      if (selectedAction.nuevo_estado_pedido === 'entregado') {
+        setHistorialRefreshKey((currentKey) => currentKey + 1)
+      }
+    } catch (err) {
+      setAssignError(err instanceof Error ? err.message : 'No se pudo resolver la novedad')
+    } finally {
+      setSavingResolveNovedadId(null)
+    }
+  }
+
+  const openMainTab = (tab: 'ordenes' | 'mapa' | 'historial' | 'perfil') => {
+    setMainTab(tab)
+    setIsMenuOpen(false)
+  }
+
+  const handleMenuLogout = () => {
+    setIsMenuOpen(false)
+    onLogout()
+  }
+
   return (
     <main className="app-shell">
       <section className="orders-view">
         {mainTab === 'ordenes' ? (
           <>
             <header className="mobile-topbar">
-              <button type="button" aria-label="Menu">
+              <button type="button" aria-label="Abrir menu" onClick={() => setIsMenuOpen(true)}>
                 <Menu size={22} />
               </button>
               <div className="topbar-brand">
-                <img className="app-logo" src="/img/logo.png" alt="PetalOps" />
+                <img className="app-logo" src={APP_LOGO_URL} alt="PetalOps" />
                 <span>PetalOps DomiApp</span>
               </div>
               <button type="button" className="logout-button" onClick={onLogout} aria-label="Cerrar sesión">
@@ -1260,6 +1712,66 @@ function AvailableOrdersScreen({
                 <span>Salir</span>
               </button>
             </header>
+
+            {isMenuOpen ? (
+              <div className="hamburger-overlay" role="presentation" onClick={() => setIsMenuOpen(false)}>
+                <aside
+                  className="hamburger-drawer"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Menu principal"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <header className="hamburger-header">
+                    <button type="button" aria-label="Cerrar menu" onClick={() => setIsMenuOpen(false)}>
+                      <ArrowLeft size={20} />
+                    </button>
+                    <div>
+                      <strong>{session.domiciliario.nombre_empleado}</strong>
+                      <span>{tenantName}</span>
+                    </div>
+                  </header>
+
+                  <section className="hamburger-summary" aria-label="Resumen de jornada">
+                    <article>
+                      <strong>{misPedidosPorFecha.length}</strong>
+                      <span>Asignados</span>
+                    </article>
+                    <article>
+                      <strong>{entregadosPedidos.length}</strong>
+                      <span>Entregados</span>
+                    </article>
+                    <article>
+                      <strong>{noEntregadosPedidos.length}</strong>
+                      <span>Novedades</span>
+                    </article>
+                  </section>
+
+                  <nav className="hamburger-menu" aria-label="Opciones del menu">
+                    <button type="button" onClick={() => openMainTab('ordenes')}>
+                      <span><Package size={18} /> Pedidos</span>
+                      <ChevronRight size={17} />
+                    </button>
+                    <button type="button" onClick={() => openMainTab('mapa')}>
+                      <span><FileText size={18} /> Novedades</span>
+                      <ChevronRight size={17} />
+                    </button>
+                    <button type="button" onClick={() => openMainTab('historial')}>
+                      <span><History size={18} /> Historial</span>
+                      <ChevronRight size={17} />
+                    </button>
+                    <button type="button" onClick={() => openMainTab('perfil')}>
+                      <span><Settings size={18} /> Perfil y ajustes</span>
+                      <ChevronRight size={17} />
+                    </button>
+                    <button type="button" className="hamburger-logout" onClick={handleMenuLogout}>
+                      <span><LogOut size={18} /> Cerrar sesion</span>
+                      <ChevronRight size={17} />
+                    </button>
+                  </nav>
+                </aside>
+              </div>
+            ) : null}
 
         <section className="orders-hero">
           <div>
@@ -1417,7 +1929,7 @@ function AvailableOrdersScreen({
                       </strong>
                     ) : null}
                     <img
-                      src={pedido.imagen_arreglo || pedido.imagenes_arreglo?.[0] || '/img/logo.png'}
+                      src={pedido.imagen_arreglo || pedido.imagenes_arreglo?.[0] || APP_LOGO_URL}
                       alt={pedido.arreglo || `Pedido ${pedido.numero_pedido}`}
                     />
                   </div>
@@ -1523,10 +2035,384 @@ function AvailableOrdersScreen({
           </>
         ) : null}
 
+        {mainTab === 'mapa' ? (
+          <section className="novedades-view" aria-label="Novedades">
+            <header className="profile-topbar">
+              <button type="button" aria-label="Menu" onClick={() => setIsMenuOpen(true)}>
+                <Menu size={22} />
+              </button>
+              <strong>Novedades</strong>
+              <span aria-hidden="true" />
+            </header>
+
+            <section className="history-hero">
+              <div>
+                <h1>Novedades</h1>
+                <p>Gestiona casos reportados en entregas</p>
+              </div>
+              {tenantLogoUrl ? (
+                <img className="hero-tenant-logo" src={tenantLogoUrl} alt={tenantName} />
+              ) : null}
+            </section>
+
+            <section className="history-search">
+              <label className="search-box">
+                <Search size={18} />
+                <span className="sr-only">Buscar novedad</span>
+                <input
+                  type="search"
+                  placeholder="Buscar pedido, cliente o zona"
+                  value={novedadesSearchTerm}
+                  onChange={(event) => setNovedadesSearchTerm(event.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="history-filter-button"
+                onClick={() => setNovedadesRefreshKey((currentKey) => currentKey + 1)}
+              >
+                <Search size={15} />
+                Buscar
+              </button>
+            </section>
+
+            <section className="history-filters" aria-label="Estado de novedades">
+              {NOVEDAD_ESTADO_FILTROS.map((filter) => (
+                <button
+                  key={filter.value}
+                  type="button"
+                  className={novedadesEstado === filter.value ? 'active' : undefined}
+                  onClick={() => setNovedadesEstado(filter.value)}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </section>
+
+            <section className="history-filters novedades-periods" aria-label="Periodo de novedades">
+              {NOVEDAD_PERIODO_FILTROS.map((filter) => (
+                <button
+                  key={filter.value}
+                  type="button"
+                  className={novedadesPeriodo === filter.value ? 'active' : undefined}
+                  onClick={() => setNovedadesPeriodo(filter.value)}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </section>
+
+            <section className="history-metrics" aria-label="Resumen de novedades">
+              <article className="con-novedad">
+                <span><FileText size={17} /></span>
+                <div>
+                  <small>Abiertas</small>
+                  <strong>{novedades.filter((novedad) => novedad.estado_novedad === 'abierta').length}</strong>
+                </div>
+              </article>
+              <article className="entregado">
+                <span><CheckCircle2 size={17} /></span>
+                <div>
+                  <small>Resueltas</small>
+                  <strong>{novedades.filter((novedad) => novedad.estado_novedad === 'resuelta').length}</strong>
+                </div>
+              </article>
+              <article className="cancelado">
+                <span><EyeOff size={17} /></span>
+                <div>
+                  <small>Canceladas</small>
+                  <strong>{novedades.filter((novedad) => novedad.estado_novedad === 'cancelada').length}</strong>
+                </div>
+              </article>
+              <article className="reasignado">
+                <span><Package size={17} /></span>
+                <div>
+                  <small>Total</small>
+                  <strong>{novedades.length}</strong>
+                </div>
+              </article>
+            </section>
+
+            {isLoadingNovedades ? <p className="status-message">Cargando novedades...</p> : null}
+            {assignError && mainTab === 'mapa' ? <p className="status-message error-message">{assignError}</p> : null}
+            {novedadesError ? (
+              <div className="status-card">
+                <p>{novedadesError}</p>
+                <button type="button" onClick={() => setNovedadesRefreshKey((currentKey) => currentKey + 1)}>
+                  Reintentar
+                </button>
+              </div>
+            ) : null}
+
+            {!isLoadingNovedades && !novedadesError ? (
+              <div className="novedades-list">
+                {novedades.length ? (
+                  novedades.map((novedad) => {
+                    const estadoLabel = NOVEDAD_ESTADO_FILTROS.find((filter) => filter.value === novedad.estado_novedad)?.label || novedad.estado_novedad
+                    const issueText = novedad.motivo || novedad.tipo_novedad || 'Novedad reportada'
+                    const descriptionText = novedad.descripcion || 'Sin descripcion'
+                    const reportedLabel = eventDateTimeLabel(novedad.reportada_en) || 'Sin fecha'
+                    const resolvedLabel = eventDateTimeLabel(novedad.resuelta_en) || null
+
+                    return (
+                      <article key={novedad.id_novedad} className="novedad-card">
+                        <img
+                          src={novedad.imagen_arreglo || novedad.imagenes_arreglo?.[0] || APP_LOGO_URL}
+                          alt={novedad.arreglo || `Pedido ${novedad.numero_pedido}`}
+                        />
+                        <div className="novedad-card-content">
+                          <div className="novedad-card-topline">
+                            <strong>#{novedad.numero_pedido ?? 'N/A'}</strong>
+                            <span className={`novedad-status ${novedad.estado_novedad}`}>{estadoLabel}</span>
+                          </div>
+                          <h2>{novedad.destinatario || novedad.cliente || 'Cliente sin nombre'}</h2>
+                          <p className="order-arrangement">{novedad.arreglo || 'Arreglo sin especificar'}</p>
+                          <p>
+                            <MapPin size={13} />
+                            {novedad.direccion || 'Sin direccion'}
+                          </p>
+                          <p>
+                            <FileText size={13} />
+                            {issueText}: {descriptionText}
+                          </p>
+                          <div className="novedad-meta">
+                            <span>Reportada: {reportedLabel}</span>
+                            {resolvedLabel ? <span>Resuelta: {resolvedLabel}</span> : null}
+                          </div>
+                          <div className="novedad-actions">
+                            {novedad.puede_contactar_cliente ? (
+                              <>
+                                <a href={`tel:${novedad.telefono_destinatario || ''}`}>
+                                  <Phone size={14} />
+                                  Llamar
+                                </a>
+                                <a href={`https://wa.me/${String(novedad.telefono_destinatario || '').replace(/\D/g, '')}`} target="_blank" rel="noreferrer">
+                                  <MessageSquare size={14} />
+                                  WhatsApp
+                                </a>
+                              </>
+                            ) : null}
+                            {novedad.evidencia_foto_url ? (
+                              <a href={novedad.evidencia_foto_url} target="_blank" rel="noreferrer">
+                                <Eye size={14} />
+                                Evidencia
+                              </a>
+                            ) : null}
+                            {novedad.estado_novedad === 'abierta' ? (
+                              <button type="button" onClick={() => openResolveNovedad(novedad)}>
+                                <CheckCircle2 size={14} />
+                                Resolver
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      </article>
+                    )
+                  })
+                ) : (
+                  <div className="status-card">
+                    <p>No hay novedades para estos filtros.</p>
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
+        {mainTab === 'historial' ? (
+          <section className="history-view" aria-label="Historial de entregas">
+            <header className="profile-topbar">
+              <button type="button" aria-label="Menu" onClick={() => setIsMenuOpen(true)}>
+                <Menu size={22} />
+              </button>
+              <strong>Historial</strong>
+              <span aria-hidden="true" />
+            </header>
+
+            <section className="history-hero">
+              <div>
+                <h1>Hola, {session.domiciliario.nombre_empleado.split(' ')[0]}</h1>
+                <p>Revisa tu historial de entregas</p>
+              </div>
+              {tenantLogoUrl ? (
+                <img className="hero-tenant-logo" src={tenantLogoUrl} alt={tenantName} />
+              ) : null}
+            </section>
+
+            <section className="history-tabs" aria-label="Tipo de pedidos">
+              <button type="button" onClick={() => setMainTab('ordenes')}>
+                <Package size={14} />
+                Pedidos disponibles
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMainTab('ordenes')
+                  setActiveTab('mis-pedidos')
+                }}
+              >
+                <Clipboard size={14} />
+                Mis pedidos
+              </button>
+              <button type="button" className="active">
+                <History size={14} />
+                Historial
+              </button>
+            </section>
+
+            <section className="history-search">
+              <label className="search-box">
+                <Search size={18} />
+                <span className="sr-only">Buscar en historial</span>
+                <input
+                  type="search"
+                  placeholder="Buscar pedido, cliente o direccion"
+                  value={historialSearchTerm}
+                  onChange={(event) => setHistorialSearchTerm(event.target.value)}
+                />
+              </label>
+              <label className="history-date-filter">
+                <CalendarDays size={15} />
+                <span className="sr-only">Filtrar historial por fecha</span>
+                <input
+                  type="date"
+                  value={historialDateFilter}
+                  onChange={(event) => setHistorialDateFilter(event.target.value)}
+                />
+              </label>
+            </section>
+
+            <section className="history-filters" aria-label="Filtros del historial">
+              {HISTORIAL_FILTROS.map((filter) => (
+                <button
+                  key={filter.value}
+                  type="button"
+                  className={historialPeriodo === filter.value ? 'active' : undefined}
+                  onClick={() => setHistorialPeriodo(filter.value)}
+                >
+                  {filter.label}
+                </button>
+              ))}
+              {historialDateFilter ? (
+                <button type="button" onClick={() => setHistorialDateFilter('')}>
+                  Limpiar fecha
+                </button>
+              ) : null}
+            </section>
+
+            <section className="history-metrics" aria-label="Resumen del historial">
+              <article className="entregado">
+                <span><CheckCircle2 size={17} /></span>
+                <div>
+                  <small>Entregados</small>
+                  <strong>{historialEntregadosCount}</strong>
+                </div>
+              </article>
+              <article className="con-novedad">
+                <span><FileText size={17} /></span>
+                <div>
+                  <small>Con novedad</small>
+                  <strong>{filteredHistorialPedidos.filter((pedido) => pedido.estado_final === 'con_novedad').length}</strong>
+                </div>
+              </article>
+              <article className="cancelado">
+                <span><EyeOff size={17} /></span>
+                <div>
+                  <small>Cancelados</small>
+                  <strong>{filteredHistorialPedidos.filter((pedido) => pedido.estado_final === 'cancelado').length}</strong>
+                </div>
+              </article>
+              <article className="reasignado">
+                <span><Radio size={17} /></span>
+                <div>
+                  <small>Reasignados</small>
+                  <strong>{filteredHistorialPedidos.filter((pedido) => pedido.estado_final === 'reasignado').length}</strong>
+                </div>
+              </article>
+            </section>
+
+            {isLoadingHistorial ? <p className="status-message">Cargando historial...</p> : null}
+            {historialError ? (
+              <div className="status-card">
+                <p>{historialError}</p>
+                <button type="button" onClick={() => setHistorialRefreshKey((currentKey) => currentKey + 1)}>
+                  Reintentar
+                </button>
+              </div>
+            ) : null}
+
+            {!isLoadingHistorial && !historialError ? (
+              <div className="history-list">
+                {filteredHistorialPedidos.length ? (
+                  filteredHistorialPedidos.map((pedido) => {
+                    const estadoFinal = pedido.estado_final || 'entregado'
+                    const estadoLabel = HISTORIAL_ESTADO_LABEL[estadoFinal] || estadoFinal
+                    const evidenceUrl = pedido.evidencia_entrega_url || pedido.evidencia_firma_url
+                    const detailText = pedido.novedad || pedido.observaciones
+
+                    return (
+                      <article key={pedido.numero_pedido ?? `${pedido.destinatario}-${pedido.fecha_entrega}`} className="history-card">
+                        <img
+                          src={pedido.imagen_arreglo || pedido.imagenes_arreglo?.[0] || APP_LOGO_URL}
+                          alt={pedido.arreglo || `Pedido ${pedido.numero_pedido}`}
+                        />
+                        <div className="history-card-content">
+                          <strong className="history-order-number">#{pedido.numero_pedido ?? 'N/A'}</strong>
+                          <h2>{pedido.destinatario || pedido.cliente || 'Cliente sin nombre'}</h2>
+                          <p className="order-arrangement">{pedido.arreglo || 'Arreglo sin especificar'}</p>
+                          <div className="history-location">
+                            <span><MapPin size={12} /> {pedido.direccion || 'Sin direccion'}</span>
+                            <span><Package size={12} /> {pedido.barrio || 'Sin barrio'}</span>
+                          </div>
+                          {detailText && ['con_novedad', 'cancelado', 'reasignado'].includes(estadoFinal) ? (
+                            <p className="history-detail">
+                              <FileText size={14} />
+                              {detailText}
+                            </p>
+                          ) : null}
+                        </div>
+                        <span className={`history-status ${estadoFinal}`}>{estadoLabel}</span>
+                        <div className="history-timeline">
+                          <div>
+                            <span>Asignado</span>
+                            <strong>{formatDateControl(dateOnly(pedido.fecha_asignacion || '')) || 'N/A'}</strong>
+                            <small>{pedido.hora_asignado || 'N/A'}</small>
+                          </div>
+                          <div>
+                            <span>{estadoFinal === 'cancelado' ? 'Cancelado' : 'Entregado'}</span>
+                            <strong>{formatDateControl(dateOnly(pedido.fecha_entrega || '')) || 'N/A'}</strong>
+                            <small>{pedido.hora_entregado || 'N/A'}</small>
+                          </div>
+                        </div>
+                        <div className="history-phone">
+                          <Phone size={12} />
+                          {pedido.telefono_destinatario || 'Sin telefono'}
+                        </div>
+                        {evidenceUrl ? (
+                          <div className="history-actions">
+                            <a href={evidenceUrl} target="_blank" rel="noreferrer">
+                              <Eye size={13} />
+                              Ver evidencia
+                            </a>
+                          </div>
+                        ) : null}
+                      </article>
+                    )
+                  })
+                ) : (
+                  <div className="status-card">
+                    <p>No hay pedidos en el historial para este filtro.</p>
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
         {mainTab === 'perfil' ? (
           <section className="profile-view" aria-label="Perfil del domiciliario">
             <header className="profile-topbar">
-              <button type="button" aria-label="Menu">
+              <button type="button" aria-label="Menu" onClick={() => setIsMenuOpen(true)}>
                 <Menu size={22} />
               </button>
               <strong>Mi perfil</strong>
@@ -1551,10 +2437,7 @@ function AvailableOrdersScreen({
               <div className="profile-identity">
                 <strong>{session.domiciliario.nombre_empleado}</strong>
                 <span>{session.domiciliario.cargo || 'Domiciliario'}</span>
-                <small>
-                  <Star size={12} fill="currentColor" />
-                  {isUploadingProfilePhoto ? 'Subiendo foto...' : '4.9'}
-                </small>
+                {isUploadingProfilePhoto ? <small>Subiendo foto...</small> : null}
                 {!session.domiciliario.foto_url || isUploadingProfilePhoto ? (
                   <button
                     type="button"
@@ -1569,51 +2452,100 @@ function AvailableOrdersScreen({
               </div>
             </section>
 
-            <section className="profile-stats" aria-label="Indicadores del domiciliario">
+            <section className="profile-info" aria-label="Informacion del domiciliario">
               <article>
-                <strong>{entregadosPedidos.length}</strong>
-                <span>Entregas hoy</span>
+                <span><User size={16} /> Usuario</span>
+                <strong>{session.domiciliario.usuario || 'Sin usuario'}</strong>
               </article>
               <article>
-                <strong>{effectivenessRate}%</strong>
-                <span>Efectividad</span>
+                <span><MessageSquare size={16} /> Email</span>
+                <strong>{session.domiciliario.email || 'Sin email'}</strong>
               </article>
               <article>
-                <strong>4.9</strong>
-                <span>Calificación</span>
+                <span><ShieldCheck size={16} /> Cargo</span>
+                <strong>{session.domiciliario.cargo || 'Domiciliario'}</strong>
+              </article>
+              <article>
+                <span><Package size={16} /> Empresa</span>
+                <strong>{tenantName}</strong>
+              </article>
+              <article>
+                <span><MapPin size={16} /> Sucursal</span>
+                <strong>{activeSucursalId || 'N/A'}</strong>
+              </article>
+              <article>
+                <span><FileText size={16} /> ID empleado</span>
+                <strong>{session.domiciliario.id_empleado}</strong>
               </article>
             </section>
 
-            <section className="profile-menu" aria-label="Opciones de perfil">
-              <button type="button">
-                <span><ShieldCheck size={17} /> Mi desempeño</span>
-                <ChevronRight size={18} />
-              </button>
-              <button type="button">
-                <span><History size={17} /> Historial de entregas</span>
-                <ChevronRight size={18} />
-              </button>
-              <button type="button">
-                <span><FileText size={17} /> Documentos</span>
-                <ChevronRight size={18} />
-              </button>
-              <button type="button">
-                <span><Bike size={17} /> Vehículo</span>
-                <em>Moto · Sucursal {activeSucursalId || 'N/A'}</em>
-              </button>
-              <button type="button">
-                <span><MessageSquare size={17} /> Soporte</span>
-                <ChevronRight size={18} />
-              </button>
-              <button type="button">
-                <span><Settings size={17} /> Configuración</span>
-                <ChevronRight size={18} />
-              </button>
+            <section className="profile-actions" aria-label="Acciones de perfil">
               <button type="button" onClick={onLogout}>
-                <span><LogOut size={17} /> Cerrar sesión</span>
+                <LogOut size={17} />
+                Cerrar sesion
               </button>
             </section>
           </section>
+        ) : null}
+
+        {mainTab !== 'ordenes' && isMenuOpen ? (
+          <div className="hamburger-overlay" role="presentation" onClick={() => setIsMenuOpen(false)}>
+            <aside
+              className="hamburger-drawer"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Menu principal"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <header className="hamburger-header">
+                <button type="button" aria-label="Cerrar menu" onClick={() => setIsMenuOpen(false)}>
+                  <ArrowLeft size={20} />
+                </button>
+                <div>
+                  <strong>{session.domiciliario.nombre_empleado}</strong>
+                  <span>{tenantName}</span>
+                </div>
+              </header>
+
+              <section className="hamburger-summary" aria-label="Resumen de jornada">
+                <article>
+                  <strong>{misPedidosPorFecha.length}</strong>
+                  <span>Asignados</span>
+                </article>
+                <article>
+                  <strong>{entregadosPedidos.length}</strong>
+                  <span>Entregados</span>
+                </article>
+                <article>
+                  <strong>{noEntregadosPedidos.length}</strong>
+                  <span>Novedades</span>
+                </article>
+              </section>
+
+              <nav className="hamburger-menu" aria-label="Opciones del menu">
+                <button type="button" onClick={() => openMainTab('ordenes')}>
+                  <span><Package size={18} /> Pedidos</span>
+                  <ChevronRight size={17} />
+                </button>
+                <button type="button" onClick={() => openMainTab('mapa')}>
+                  <span><FileText size={18} /> Novedades</span>
+                  <ChevronRight size={17} />
+                </button>
+                <button type="button" onClick={() => openMainTab('historial')}>
+                  <span><History size={18} /> Historial</span>
+                  <ChevronRight size={17} />
+                </button>
+                <button type="button" onClick={() => openMainTab('perfil')}>
+                  <span><Settings size={18} /> Perfil y ajustes</span>
+                  <ChevronRight size={17} />
+                </button>
+                <button type="button" className="hamburger-logout" onClick={handleMenuLogout}>
+                  <span><LogOut size={18} /> Cerrar sesion</span>
+                  <ChevronRight size={17} />
+                </button>
+              </nav>
+            </aside>
+          </div>
         ) : null}
 
         {selectedPedido ? (
@@ -1635,7 +2567,7 @@ function AvailableOrdersScreen({
 
                 <figure className="detail-product">
                   <img
-                    src={selectedPedido.imagen_arreglo || selectedPedido.imagenes_arreglo?.[0] || '/img/logo.png'}
+                    src={selectedPedido.imagen_arreglo || selectedPedido.imagenes_arreglo?.[0] || APP_LOGO_URL}
                     alt={selectedPedido.arreglo || `Pedido ${selectedPedido.numero_pedido}`}
                   />
                 </figure>
@@ -1707,14 +2639,14 @@ function AvailableOrdersScreen({
                   <strong>PetalOps</strong>
                   <span>Entrega en curso</span>
                 </div>
-                <button type="button" aria-label="Opciones">
+                <button type="button" aria-label="Opciones" onClick={() => setIsMenuOpen(true)}>
                   <Menu size={20} />
                 </button>
               </header>
 
               <section className="route-order">
                 <img
-                  src={routePedido.imagen_arreglo || routePedido.imagenes_arreglo?.[0] || '/img/logo.png'}
+                  src={routePedido.imagen_arreglo || routePedido.imagenes_arreglo?.[0] || APP_LOGO_URL}
                   alt={routePedido.arreglo || `Pedido ${routePedido.numero_pedido}`}
                 />
                 <div>
@@ -1905,7 +2837,7 @@ function AvailableOrdersScreen({
 
               <section className="proof-order">
                 <img
-                  src={proofPedido.imagen_arreglo || proofPedido.imagenes_arreglo?.[0] || '/img/logo.png'}
+                  src={proofPedido.imagen_arreglo || proofPedido.imagenes_arreglo?.[0] || APP_LOGO_URL}
                   alt={proofPedido.arreglo || `Pedido ${proofPedido.numero_pedido}`}
                 />
                 <div>
@@ -1919,7 +2851,7 @@ function AvailableOrdersScreen({
                 <h2>Foto de entrega</h2>
                 <img
                   className="proof-photo"
-                  src={proofPhotoUrl || proofPedido.imagen_arreglo || proofPedido.imagenes_arreglo?.[0] || '/img/logo.png'}
+                  src={proofPhotoUrl || proofPedido.imagen_arreglo || proofPedido.imagenes_arreglo?.[0] || APP_LOGO_URL}
                   alt="Foto de entrega"
                 />
                 <input
@@ -1984,7 +2916,7 @@ function AvailableOrdersScreen({
 
               <section className="novedad-order">
                 <img
-                  src={novedadPedido.imagen_arreglo || novedadPedido.imagenes_arreglo?.[0] || '/img/logo.png'}
+                  src={novedadPedido.imagen_arreglo || novedadPedido.imagenes_arreglo?.[0] || APP_LOGO_URL}
                   alt={novedadPedido.arreglo || `Pedido ${novedadPedido.numero_pedido}`}
                 />
                 <div>
@@ -2059,6 +2991,119 @@ function AvailableOrdersScreen({
           </div>
         ) : null}
 
+        {resolvingNovedad ? (
+          <div className="novedad-overlay" role="dialog" aria-modal="true" aria-label="Resolver novedad">
+            <section className="novedad-view">
+              <header className="proof-topbar">
+                <button type="button" aria-label="Volver" onClick={() => setResolvingNovedad(null)}>
+                  <ArrowLeft size={21} />
+                </button>
+                <strong>Resolver novedad</strong>
+                <span aria-hidden="true" />
+              </header>
+
+              <section className="novedad-order">
+                <img
+                  src={resolvingNovedad.imagen_arreglo || resolvingNovedad.imagenes_arreglo?.[0] || APP_LOGO_URL}
+                  alt={resolvingNovedad.arreglo || `Pedido ${resolvingNovedad.numero_pedido}`}
+                />
+                <div>
+                  <strong>#{resolvingNovedad.numero_pedido ?? 'N/A'}</strong>
+                  <span>{resolvingNovedad.motivo || resolvingNovedad.tipo_novedad || 'Novedad reportada'}</span>
+                </div>
+                <em>Abierta</em>
+              </section>
+
+              <section className="novedad-section">
+                <h2>Que paso despues de la novedad</h2>
+                <div className="resolve-actions">
+                  {RESOLVE_NOVEDAD_ACTIONS.map((action) => (
+                    <button
+                      key={action.value}
+                      type="button"
+                      className={resolveAction === action.value ? 'active' : undefined}
+                      onClick={() => setResolveAction(action.value)}
+                    >
+                      <span>
+                        {action.value === 'entregar' ? <CheckCircle2 size={17} /> : null}
+                        {action.value === 'reintentar' ? <Bike size={17} /> : null}
+                        {action.value === 'devolver' ? <Package size={17} /> : null}
+                        {action.label}
+                      </span>
+                      <small>{action.description}</small>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              {resolveAction === 'entregar' ? (
+                <>
+                  <section className="novedad-section">
+                    <h2>Evidencia de entrega</h2>
+                    <div className="novedad-photo-grid">
+                      {resolveEvidenceUrl ? (
+                        <img src={resolveEvidenceUrl} alt="Evidencia de entrega" />
+                      ) : null}
+                      <button type="button" onClick={() => resolveEvidenceInputRef.current?.click()}>
+                        <Camera size={28} />
+                        Agregar foto
+                      </button>
+                    </div>
+                    <input
+                      ref={resolveEvidenceInputRef}
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className="sr-only"
+                      onChange={handleResolveEvidenceChange}
+                    />
+                  </section>
+
+                  <label className="novedad-section resolve-field">
+                    <h2>Nombre de quien recibe (opcional)</h2>
+                    <input
+                      type="text"
+                      value={resolveSignatureName}
+                      onChange={(event) => setResolveSignatureName(event.target.value)}
+                      placeholder="Nombre del recibido"
+                    />
+                  </label>
+
+                  <label className="novedad-section resolve-field">
+                    <h2>Documento (opcional)</h2>
+                    <input
+                      type="text"
+                      value={resolveSignatureDocument}
+                      onChange={(event) => setResolveSignatureDocument(event.target.value)}
+                      placeholder="Documento de quien recibe"
+                    />
+                  </label>
+                </>
+              ) : null}
+
+              <label className="novedad-section">
+                <h2>Observaciones (opcional)</h2>
+                <textarea
+                  value={resolveObservations}
+                  onChange={(event) => setResolveObservations(event.target.value)}
+                  placeholder="Notas internas"
+                />
+              </label>
+
+              {assignError ? <p className="status-message error-message">{assignError}</p> : null}
+
+              <button
+                type="button"
+                className="novedad-save-action"
+                disabled={savingResolveNovedadId === resolvingNovedad.id_novedad}
+                onClick={handleResolveNovedad}
+              >
+                {savingResolveNovedadId === resolvingNovedad.id_novedad ? 'Resolviendo...' : 'Confirmar resolucion'}
+              </button>
+            </section>
+          </div>
+        ) : null}
+
         <nav className="bottom-nav" aria-label="Navegación principal">
           <button
             type="button"
@@ -2066,15 +3111,15 @@ function AvailableOrdersScreen({
             onClick={() => setMainTab('ordenes')}
           >
             <Package size={20} />
-            Ordenes
+            Pedidos
           </button>
           <button
             type="button"
             className={mainTab === 'mapa' ? 'active' : undefined}
             onClick={() => setMainTab('mapa')}
           >
-            <Map size={20} />
-            Mapa
+            <FileText size={20} />
+            Novedades
           </button>
           <button
             type="button"
@@ -2103,6 +3148,10 @@ function App() {
 
   const logout = () => {
     localStorage.removeItem(SESSION_KEY)
+    localStorage.removeItem(TENANT_KEY)
+    localStorage.removeItem(EMPRESA_ID_KEY)
+    localStorage.removeItem(SUCURSAL_ID_KEY)
+    localStorage.removeItem(TOKEN_KEY)
     setSession(null)
   }
 
