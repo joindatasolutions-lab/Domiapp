@@ -764,7 +764,7 @@ button {
 
 .orders-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 136px auto;
+  grid-template-columns: minmax(0, 1fr) 136px;
   align-items: center;
   gap: 8px;
   padding: 13px 12px 10px;
@@ -807,11 +807,24 @@ button {
 }
 
 .orders-toolbar > button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 5px;
   background: transparent;
   color: #f02c7c;
   font-size: 12px;
   font-weight: 950;
   white-space: nowrap;
+}
+
+.orders-refresh-action {
+  justify-self: end;
+}
+
+.orders-refresh-action:disabled {
+  color: #b9aeb8;
+  cursor: not-allowed;
 }
 
 .metric-grid {

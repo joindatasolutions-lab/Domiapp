@@ -24,6 +24,7 @@ import {
   Package,
   Phone,
   Radio,
+  RefreshCw,
   Settings,
   ShieldCheck,
   GripVertical,
@@ -1934,6 +1935,15 @@ function AvailableOrdersScreen({
           </div>
           <button type="button" onClick={() => setShowAllDates(true)}>
             Ver todos
+          </button>
+          <button
+            type="button"
+            className="orders-refresh-action"
+            disabled={isLoading}
+            onClick={() => loadOrders()}
+          >
+            <RefreshCw size={15} />
+            Actualizar
           </button>
         </section>
 
