@@ -465,6 +465,7 @@ async function resolverNovedad(
   token: string,
   numeroPedido: number,
   idNovedad: number,
+  sucursalId: number | null | undefined,
   payload: {
     solucion: string
     observaciones?: string
@@ -475,7 +476,7 @@ async function resolverNovedad(
     firma_imagen_url?: string
   }
 ) {
-  const response = await fetch(`${API_URL}/pedidos/${numeroPedido}/novedades/${idNovedad}/resolver`, {
+  const response = await fetch(`${API_URL}/pedidos/${numeroPedido}/novedades/${idNovedad}/resolver${sucursalQueryParam(sucursalId)}`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1750,6 +1751,7 @@ function AvailableOrdersScreen({
         session.access_token,
         resolvingNovedad.numero_pedido,
         resolvingNovedad.id_novedad,
+        activeSucursalId,
         {
           solucion: selectedAction.solucion,
           observaciones: resolveObservations.trim() || undefined,
