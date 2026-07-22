@@ -1616,18 +1616,13 @@ function AvailableOrdersScreen({
   const entregadosPedidos = misPedidosPorFecha.filter((pedido) => {
     return normalizedDeliveryStatus(pedido.estado_entrega) === 'entregado'
   })
-  const entregadosPedidoKeys = new Set(entregadosPedidos.map((pedido) => String(pedido.numero_pedido ?? '')))
   const entregadosHistorialPedidos = kpiHistorialPedidos.filter((pedido) => {
     const matchesDate = showAllDates || dateOnly(pedido.fecha_entrega) === selectedDate
-    const pedidoKey = String(pedido.numero_pedido ?? '')
 
-    return matchesDate && normalizedDeliveryStatus(pedido.estado_final) === 'entregado' && !entregadosPedidoKeys.has(pedidoKey)
+    return matchesDate && normalizedDeliveryStatus(pedido.estado_final) === 'entregado'
   })
-  const entregadosKpiCount = entregadosPedidos.length + entregadosHistorialPedidos.length
-  const entregadosVisiblesPedidos = [
-    ...entregadosPedidos,
-    ...entregadosHistorialPedidos.map(historialPedidoToPedido)
-  ]
+  const entregadosKpiCount = entregadosHistorialPedidos.length
+  const entregadosVisiblesPedidos = entregadosHistorialPedidos.map(historialPedidoToPedido)
   const pedidosVisiblesPorFecha = activeTab === 'disponibles'
     ? disponiblesPorFecha
     : ordersKpiFilter === 'entregados'
