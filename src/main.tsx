@@ -50,7 +50,9 @@ const LOGIN_TIMEOUT_MS = 20000
 type DeliveryStepKey = 'asignado' | 'en_ruta' | 'entregado'
 type HistorialPeriodo = 'hoy' | 'semana' | 'mes' | 'anio' | 'todos'
 type NovedadEstado = 'abierta' | 'resuelta' | 'cancelada' | 'todas'
+type HistorialStatusFilter = 'todos' | 'entregado' | 'con_novedad' | 'cancelado' | 'reasignado'
 type ResolveNovedadAction = 'entregar' | 'reintentar' | 'devolver'
+type OrdersKpiFilter = 'disponibles' | 'asignados' | 'en_ruta' | 'entregados' | null
 
 interface TenantInfo {
   empresa_id?: number | null
@@ -760,6 +762,29 @@ function pedidoNovedadInfo(pedido: PedidoDisponible) {
   }
 }
 
+function historialPedidoToPedido(pedido: PedidoHistorial): PedidoDisponible {
+  return {
+    numero_pedido: pedido.numero_pedido,
+    destinatario: pedido.destinatario || pedido.cliente || 'Cliente sin nombre',
+    telefono_destinatario: pedido.telefono_destinatario || '',
+    arreglo: pedido.arreglo || 'Arreglo sin especificar',
+    imagen_arreglo: pedido.imagen_arreglo,
+    imagenes_arreglo: pedido.imagenes_arreglo,
+    direccion: pedido.direccion || 'Sin direccion',
+    barrio: pedido.barrio || 'Sin barrio',
+    zona: '',
+    hora_entrega: pedido.hora_entregado || '',
+    fecha_entrega: pedido.fecha_entrega || '',
+    estado_entrega: pedido.estado_final,
+    hora_asignado: pedido.hora_asignado,
+    fecha_asignacion: pedido.fecha_asignacion,
+    hora_entregado: pedido.hora_entregado,
+    fecha_entrega_real: pedido.fecha_entrega,
+    evidencia_foto_url: pedido.evidencia_entrega_url,
+    observaciones: pedido.observaciones
+  }
+}
+
 function mergePedidoEstado(pedido: PedidoDisponible, data: Partial<PedidoDisponible> & { estado?: string | null }) {
   return {
     ...pedido,
@@ -961,15 +986,18 @@ function AvailableOrdersScreen({
   const [pedidos, setPedidos] = useState<PedidoDisponible[]>([])
   const [misPedidos, setMisPedidos] = useState<PedidoDisponible[]>([])
   const [historialPedidos, setHistorialPedidos] = useState<PedidoHistorial[]>([])
+  const [kpiHistorialPedidos, setKpiHistorialPedidos] = useState<PedidoHistorial[]>([])
   const [novedades, setNovedades] = useState<Novedad[]>([])
   const [mainTab, setMainTab] = useState<'ordenes' | 'mapa' | 'historial' | 'perfil'>('ordenes')
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'disponibles' | 'mis-pedidos'>('disponibles')
+  const [ordersKpiFilter, setOrdersKpiFilter] = useState<OrdersKpiFilter>(null)
   const [novedadesEstado, setNovedadesEstado] = useState<NovedadEstado>('abierta')
   const [novedadesPeriodo, setNovedadesPeriodo] = useState<HistorialPeriodo>('hoy')
   const [novedadesSearchTerm, setNovedadesSearchTerm] = useState('')
   const [novedadesRefreshKey, setNovedadesRefreshKey] = useState(0)
   const [historialPeriodo, setHistorialPeriodo] = useState<HistorialPeriodo>('mes')
+  const [historialStatusFilter, setHistorialStatusFilter] = useState<HistorialStatusFilter>('todos')
   const [historialSearchTerm, setHistorialSearchTerm] = useState('')
   const [historialDateFilter, setHistorialDateFilter] = useState(todayInputValue)
   const [historialRefreshKey, setHistorialRefreshKey] = useState(0)
@@ -1026,9 +1054,10 @@ function AvailableOrdersScreen({
     setError(null)
 
     try {
-      const [disponibles, asignados] = await Promise.all([
+      const [disponibles, asignados, historialKpi] = await Promise.all([
         getPedidosDisponibles(selectedDate, activeEmpresaId, activeSucursalId),
-        getPedidosAsignados(session.access_token, selectedDate, activeEmpresaId, activeSucursalId)
+        getPedidosAsignados(session.access_token, selectedDate, activeEmpresaId, activeSucursalId),
+        getPedidosHistorial(session.access_token, 'mes', '', 200, 0).catch(() => [])
       ])
       const filteredAsignados = asignados.filter((pedido) =>
         !excludedPedidoNumbers.includes(Number(pedido.numero_pedido))
@@ -1038,6 +1067,7 @@ function AvailableOrdersScreen({
       )
 
       setPedidos([...disponibles, ...missingExtraDisponibles])
+      setKpiHistorialPedidos(historialKpi)
       setMisPedidos((currentPedidos) => {
         const localActivePedidos = [...currentPedidos, ...localPedidosEnCurso].filter((pedido) => {
           const status = normalizedDeliveryStatus(pedido.estado_entrega)
@@ -1576,7 +1606,6 @@ function AvailableOrdersScreen({
     })
   }, [misPedidos, selectedDate, showAllDates])
 
-  const pedidosVisiblesPorFecha = activeTab === 'disponibles' ? disponiblesPorFecha : misPedidosPorFecha
   const assignedPedidos = misPedidosPorFecha.filter((pedido) => {
     const status = normalizedDeliveryStatus(pedido.estado_entrega)
     return status === 'pendiente' || status === 'asignado'
@@ -1587,6 +1616,23 @@ function AvailableOrdersScreen({
   const entregadosPedidos = misPedidosPorFecha.filter((pedido) => {
     return normalizedDeliveryStatus(pedido.estado_entrega) === 'entregado'
   })
+  const entregadosPedidoKeys = new Set(entregadosPedidos.map((pedido) => String(pedido.numero_pedido ?? '')))
+  const entregadosHistorialPedidos = kpiHistorialPedidos.filter((pedido) => {
+    const matchesDate = showAllDates || dateOnly(pedido.fecha_entrega) === selectedDate
+    const pedidoKey = String(pedido.numero_pedido ?? '')
+
+    return matchesDate && normalizedDeliveryStatus(pedido.estado_final) === 'entregado' && !entregadosPedidoKeys.has(pedidoKey)
+  })
+  const entregadosKpiCount = entregadosPedidos.length + entregadosHistorialPedidos.length
+  const entregadosVisiblesPedidos = [
+    ...entregadosPedidos,
+    ...entregadosHistorialPedidos.map(historialPedidoToPedido)
+  ]
+  const pedidosVisiblesPorFecha = activeTab === 'disponibles'
+    ? disponiblesPorFecha
+    : ordersKpiFilter === 'entregados'
+    ? entregadosVisiblesPedidos
+    : misPedidosPorFecha
   const noEntregadosPedidos = misPedidosPorFecha.filter((pedido) => {
     return normalizedDeliveryStatus(pedido.estado_entrega) === 'no_entregado'
   })
@@ -1606,7 +1652,18 @@ function AvailableOrdersScreen({
     new Set([...safePedidos, ...safeMisPedidos].map((pedido) => dateOnly(pedido.fecha_entrega)).filter(Boolean))
   ).sort()
   const firstAvailableDate = availableDates[0]
-  const filteredPedidos = pedidosVisiblesPorFecha.filter((pedido) => {
+  const pedidosFiltradosPorKpi = pedidosVisiblesPorFecha.filter((pedido) => {
+    if (!ordersKpiFilter) return true
+    if (ordersKpiFilter === 'disponibles') return activeTab === 'disponibles'
+
+    const status = normalizedDeliveryStatus(pedido.estado_entrega)
+    if (ordersKpiFilter === 'asignados') return status === 'pendiente' || status === 'asignado'
+    if (ordersKpiFilter === 'en_ruta') return status === 'en_ruta'
+    if (ordersKpiFilter === 'entregados') return status === 'entregado'
+
+    return true
+  })
+  const filteredPedidos = pedidosFiltradosPorKpi.filter((pedido) => {
     const term = searchTerm.trim().toLowerCase()
     if (!term) return true
 
@@ -1639,6 +1696,13 @@ function AvailableOrdersScreen({
       return Number(firstPedido.numero_pedido ?? 0) - Number(secondPedido.numero_pedido ?? 0)
     })
     : filteredPedidos
+  const ordersEmptyMessage = (() => {
+    if (activeTab === 'disponibles') return 'No hay pedidos disponibles para esta fecha.'
+    if (ordersKpiFilter === 'en_ruta') return 'No tienes pedidos en camino para esta fecha.'
+    if (ordersKpiFilter === 'entregados') return 'No tienes pedidos entregados para esta fecha.'
+
+    return 'No tienes pedidos asignados para esta fecha.'
+  })()
   const routePlanPedidos = [...misPedidosPorFecha].sort((firstPedido, secondPedido) => {
     const firstIndex = routeOrder.indexOf(pedidoRouteKey(firstPedido))
     const secondIndex = routeOrder.indexOf(pedidoRouteKey(secondPedido))
@@ -1660,16 +1724,24 @@ function AvailableOrdersScreen({
       !['entregado', 'no_entregado', 'cancelado'].includes(normalizedDeliveryStatus(pedido.estado_entrega))
     )
     : null
-  const filteredHistorialPedidos = historialDateFilter
+  const baseHistorialPedidos = historialDateFilter
     ? historialPedidos.filter((pedido) =>
       dateOnly(pedido.fecha_entrega) === historialDateFilter ||
       dateOnly(pedido.fecha_asignacion) === historialDateFilter
     )
     : historialPedidos
-  const historialEntregadosCount = filteredHistorialPedidos.filter((pedido) => pedido.estado_final === 'entregado').length
-  const historialNovedadesCount = filteredHistorialPedidos.filter((pedido) =>
-    ['con_novedad', 'cancelado', 'reasignado'].includes(pedido.estado_final)
-  ).length
+  const historialEntregadosCount = baseHistorialPedidos.filter((pedido) => pedido.estado_final === 'entregado').length
+  const historialConNovedadCount = baseHistorialPedidos.filter((pedido) => pedido.estado_final === 'con_novedad').length
+  const historialCanceladosCount = baseHistorialPedidos.filter((pedido) => pedido.estado_final === 'cancelado').length
+  const historialReasignadosCount = baseHistorialPedidos.filter((pedido) => pedido.estado_final === 'reasignado').length
+  const filteredHistorialPedidos = historialStatusFilter === 'todos'
+    ? baseHistorialPedidos
+    : baseHistorialPedidos.filter((pedido) => pedido.estado_final === historialStatusFilter)
+
+  const toggleOrdersKpiFilter = (nextFilter: Exclude<OrdersKpiFilter, null>) => {
+    setOrdersKpiFilter((currentFilter) => currentFilter === nextFilter ? null : nextFilter)
+    setActiveTab(nextFilter === 'disponibles' ? 'disponibles' : 'mis-pedidos')
+  }
 
   const movePedidoToIndex = (draggedKey: string, targetIndex: number) => {
     setRouteOrder((currentOrder) => {
@@ -1834,7 +1906,7 @@ function AvailableOrdersScreen({
                       <span>Asignados</span>
                     </article>
                     <article>
-                      <strong>{entregadosPedidos.length}</strong>
+                      <strong>{entregadosKpiCount}</strong>
                       <span>Entregados</span>
                     </article>
                     <article>
@@ -1883,14 +1955,20 @@ function AvailableOrdersScreen({
           <button
             type="button"
             className={activeTab === 'disponibles' ? 'active' : undefined}
-            onClick={() => setActiveTab('disponibles')}
+            onClick={() => {
+              setActiveTab('disponibles')
+              setOrdersKpiFilter(null)
+            }}
           >
             Pedidos disponibles
           </button>
           <button
             type="button"
             className={activeTab === 'mis-pedidos' ? 'active' : undefined}
-            onClick={() => setActiveTab('mis-pedidos')}
+            onClick={() => {
+              setActiveTab('mis-pedidos')
+              setOrdersKpiFilter(null)
+            }}
           >
             Mis pedidos
           </button>
@@ -1948,34 +2026,50 @@ function AvailableOrdersScreen({
         </section>
 
         <section className="metric-grid">
-          <article>
+          <button
+            type="button"
+            className={ordersKpiFilter === 'disponibles' ? 'active' : undefined}
+            onClick={() => toggleOrdersKpiFilter('disponibles')}
+          >
             <span className="metric-icon pink">
               <Package size={17} />
             </span>
             <strong>{disponiblesPorFecha.length}</strong>
             <p>Disponibles</p>
-          </article>
-          <article>
+          </button>
+          <button
+            type="button"
+            className={ordersKpiFilter === 'asignados' ? 'active' : undefined}
+            onClick={() => toggleOrdersKpiFilter('asignados')}
+          >
             <span className="metric-icon purple">
               <LayoutList size={17} />
             </span>
             <strong>{assignedPedidos.length}</strong>
             <p>Asignados</p>
-          </article>
-          <article>
+          </button>
+          <button
+            type="button"
+            className={ordersKpiFilter === 'en_ruta' ? 'active' : undefined}
+            onClick={() => toggleOrdersKpiFilter('en_ruta')}
+          >
             <span className="metric-icon blue">
               <Bike size={17} />
             </span>
             <strong>{enCaminoPedidos.length}</strong>
             <p>En camino</p>
-          </article>
-          <article>
+          </button>
+          <button
+            type="button"
+            className={ordersKpiFilter === 'entregados' ? 'active' : undefined}
+            onClick={() => toggleOrdersKpiFilter('entregados')}
+          >
             <span className="metric-icon green">
               <CheckCircle2 size={17} />
             </span>
-            <strong>{entregadosPedidos.length}</strong>
+            <strong>{entregadosKpiCount}</strong>
             <p>Entregados</p>
-          </article>
+          </button>
         </section>
 
         {isLoading ? <p className="status-message">Cargando pedidos...</p> : null}
@@ -2117,11 +2211,7 @@ function AvailableOrdersScreen({
               ))
             ) : (
               <div className="status-card">
-                <p>
-                  {activeTab === 'disponibles'
-                    ? 'No hay pedidos disponibles para esta fecha.'
-                    : 'No tienes pedidos asignados para esta fecha.'}
-                </p>
+                <p>{ordersEmptyMessage}</p>
                 {firstAvailableDate ? (
                   <button
                     type="button"
@@ -2405,35 +2495,51 @@ function AvailableOrdersScreen({
               ) : null}
             </section>
 
-            <section className="history-metrics" aria-label="Resumen del historial">
-              <article className="entregado">
+            <section className="history-metrics" aria-label="Filtrar historial por estado">
+              <button
+                type="button"
+                className={`history-metric-card entregado ${historialStatusFilter === 'entregado' ? 'active' : ''}`}
+                onClick={() => setHistorialStatusFilter(historialStatusFilter === 'entregado' ? 'todos' : 'entregado')}
+              >
                 <span><CheckCircle2 size={17} /></span>
                 <div>
                   <small>Entregados</small>
                   <strong>{historialEntregadosCount}</strong>
                 </div>
-              </article>
-              <article className="con-novedad">
+              </button>
+              <button
+                type="button"
+                className={`history-metric-card con-novedad ${historialStatusFilter === 'con_novedad' ? 'active' : ''}`}
+                onClick={() => setHistorialStatusFilter(historialStatusFilter === 'con_novedad' ? 'todos' : 'con_novedad')}
+              >
                 <span><FileText size={17} /></span>
                 <div>
-                  <small>Con novedad</small>
-                  <strong>{filteredHistorialPedidos.filter((pedido) => pedido.estado_final === 'con_novedad').length}</strong>
+                  <small>Novedades</small>
+                  <strong>{historialConNovedadCount}</strong>
                 </div>
-              </article>
-              <article className="cancelado">
+              </button>
+              <button
+                type="button"
+                className={`history-metric-card cancelado ${historialStatusFilter === 'cancelado' ? 'active' : ''}`}
+                onClick={() => setHistorialStatusFilter(historialStatusFilter === 'cancelado' ? 'todos' : 'cancelado')}
+              >
                 <span><EyeOff size={17} /></span>
                 <div>
                   <small>Cancelados</small>
-                  <strong>{filteredHistorialPedidos.filter((pedido) => pedido.estado_final === 'cancelado').length}</strong>
+                  <strong>{historialCanceladosCount}</strong>
                 </div>
-              </article>
-              <article className="reasignado">
+              </button>
+              <button
+                type="button"
+                className={`history-metric-card reasignado ${historialStatusFilter === 'reasignado' ? 'active' : ''}`}
+                onClick={() => setHistorialStatusFilter(historialStatusFilter === 'reasignado' ? 'todos' : 'reasignado')}
+              >
                 <span><Radio size={17} /></span>
                 <div>
                   <small>Reasignados</small>
-                  <strong>{filteredHistorialPedidos.filter((pedido) => pedido.estado_final === 'reasignado').length}</strong>
+                  <strong>{historialReasignadosCount}</strong>
                 </div>
-              </article>
+              </button>
             </section>
 
             {isLoadingHistorial ? <p className="status-message">Cargando historial...</p> : null}
@@ -2618,7 +2724,7 @@ function AvailableOrdersScreen({
                   <span>Asignados</span>
                 </article>
                 <article>
-                  <strong>{entregadosPedidos.length}</strong>
+                  <strong>{entregadosKpiCount}</strong>
                   <span>Entregados</span>
                 </article>
                 <article>
@@ -3081,9 +3187,13 @@ function AvailableOrdersScreen({
                   {novedadPhotoUrl ? (
                     <img src={novedadPhotoUrl} alt="Foto de la novedad" />
                   ) : null}
-                  <button type="button" onClick={() => novedadPhotoInputRef.current?.click()}>
+                  <button
+                    type="button"
+                    aria-label="Tomar foto de la novedad con la camara"
+                    onClick={() => novedadPhotoInputRef.current?.click()}
+                  >
                     <Camera size={28} />
-                    Agregar foto
+                    Tomar foto
                   </button>
                 </div>
                 <input
